@@ -30,6 +30,12 @@ jobs:
         with:
           python-version: '3.12'
           enable-cache: true
+      - name: Install Chinese fonts for Linux desktop checks
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
+          fc-cache -f
       - name: Install managed Python with Tk on Linux
         if: runner.os == 'Linux'
         run: |

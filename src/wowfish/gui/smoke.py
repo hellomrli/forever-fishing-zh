@@ -159,8 +159,14 @@ def run_smoke(report_path: Path) -> int:
             assert app.root.title() == f"{APP_TITLE} {__version__}"
             tabs = [app.notebook.tab(i, "text") for i in range(3)]
             assert tabs == ["钓鱼", "设置", "校准与诊断"]
-            assert tkfont.nametofont("ForeverHeading.TFont").actual("weight") == "bold"
-            report.update(title=app.root.title(), tabs=tabs, chinese_font=app.font_family)
+            heading = tkfont.nametofont("ForeverHeading.TFont").actual()
+            report.update(
+                title=app.root.title(),
+                tabs=tabs,
+                chinese_font=app.font_family,
+                heading_font=heading,
+            )
+            assert heading["weight"] == "bold", f"标题粗体不可用：{heading}"
             original_scaling = float(app.root.tk.call("tk", "scaling"))
             sizes = {
                 name: tkfont.nametofont(name).actual("size")
