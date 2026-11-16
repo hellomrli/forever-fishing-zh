@@ -35,7 +35,8 @@ jobs:
         run: |
           # The managed Linux Tk uses X11 core fonts rather than Fontconfig.
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y xfonts-base xfonts-scalable xfonts-wqy
+          sudo apt-get install --no-install-recommends -y \
+            xfonts-base xfonts-scalable xfonts-wqy fonts-urw-base35
       - name: Install managed Python with Tk on Linux
         if: runner.os == 'Linux'
         run: |
