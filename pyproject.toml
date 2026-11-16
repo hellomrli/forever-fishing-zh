@@ -1,0 +1,66 @@
+[project]
+name = "forever-fishing-zh"
+version = "1.0.0"
+description = "Forever 钓鱼助手：中文界面、图像与音频识别"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "hellomrli" }, { name = "Richard Franklin (upstream)" }]
+requires-python = ">=3.12"
+dependencies = [
+  "typer>=0.27,<1",
+  "platformdirs>=4.13,<5",
+  "loguru>=0.7,<1",
+  "numpy>=2.5,<3",
+  "tomli-w>=1.2,<2",
+  "opencv-python-headless>=4.10,<6",
+  "soundcard>=0.4,<1",
+  "mss>=10.2.0",
+  "python-xlib>=0.33 ; sys_platform == 'linux'",
+  "ttkbootstrap>=2,<3",
+  "tomlkit>=0.15,<1",
+  "filelock>=3.16,<5",
+]
+
+[project.optional-dependencies]
+train = []
+
+[project.scripts]
+wowfish = "wowfish.cli:main"
+foreverfish = "wowfish.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/hellomrli/forever-fishing-zh"
+
+[dependency-groups]
+dev = [
+  "ruff>=0.17,<1",
+  "pytest>=9,<10",
+  "pytest-cov>=7,<8",
+  "pyinstaller>=6.22,<7",
+  "pre-commit>=4,<5",
+]
+
+[build-system]
+requires = ["hatchling>=1.32"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wowfish"]
+
+[tool.uv]
+# The Chinese distribution uses an explicit release version.
+cache-keys = [{ file = "pyproject.toml" }, { file = "README.md" }]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+extend-exclude = [".reference", ".audit"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+allowed-confusables = ["，", "。", "；", "：", "（", "）", "、", "–", "×"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

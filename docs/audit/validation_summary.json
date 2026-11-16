@@ -1,0 +1,42 @@
+{
+  "review_date": "2026-11-17",
+  "upstream": "https://github.com/rsamf/wow-fishing-forever",
+  "upstream_revision": "7e37aca73e018077087fe8bf34c05fd012babda4",
+  "environment": {
+    "os": "Linux",
+    "python": "3.12.16",
+    "dependencies": "upstream uv.lock",
+    "gui": "Xvfb, Tk 9.0"
+  },
+  "upstream_checks": {
+    "pytest": "13 passed in 13.46s",
+    "ruff_check": "All checks passed!",
+    "ruff_format": "70 files already formatted"
+  },
+  "offline_reproduction": {
+    "cases": 8,
+    "all_observed": true,
+    "script": "reproduce.py",
+    "results": "reproduction_results.json",
+    "expectations": "assert current faulty upstream behavior; these checks do not certify a fix"
+  },
+  "gui_layout": {
+    "window": [900, 640],
+    "setup_requested": [914, 704],
+    "setup_available": [880, 590],
+    "calibration_section_height": 1,
+    "measurements": "gui_inspection.json",
+    "screenshot": "upstream-gui-900x640.png"
+  },
+  "windows_audio_documentation": {
+    "source": "https://learn.microsoft.com/en-us/windows/win32/api/audioclientactivationparams/ns-audioclientactivationparams-audioclient_activation_params",
+    "documented_minimum_client": "Windows 10 Build 20348",
+    "upstream_claim": "Windows 10 version 2004 or later",
+    "runtime_verification": "pending on the target Windows machine"
+  },
+  "remaining_validation": [
+    "Target Forever client integration",
+    "Windows native executable build and runtime",
+    "Real game recordings and capture performance"
+  ]
+}

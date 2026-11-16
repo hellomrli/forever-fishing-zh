@@ -1,0 +1,24 @@
+"""Helpers shared by the CLI commands."""
+
+from __future__ import annotations
+
+import typer
+
+from wowfish.config import Config, ConfigError, load_config
+from wowfish.messages import error_text
+
+
+def fail(message: str) -> None:
+    """Print a one-line error and exit 1."""
+    typer.echo(f"错误：{error_text(message)}", err=True)
+    raise typer.Exit(code=1)
+
+
+def load_config_or_fail() -> Config:
+    try:
+        cfg, warnings = load_config()
+    except ConfigError as e:
+        fail(str(e))
+    for w in warnings:
+        typer.echo(f"提示：{error_text(w)}", err=True)
+    return cfg

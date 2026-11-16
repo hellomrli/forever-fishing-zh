@@ -1,0 +1,14 @@
+.reference/
+.audit/tools/
+.audit/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+checks/
+.wowfish-home/
+.foreverfish-home/
+*.spec.bak

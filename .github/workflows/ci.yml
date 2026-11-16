@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    env:
+      FOREVERFISH_HOME: ${{ github.workspace }}/.foreverfish-home
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - run: uv sync --locked --group dev
+      - name: Lint and format
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Regression tests
+        run: uv run pytest -v --junitxml=checks/tests.xml
+      - name: Linux desktop self-test
+        if: runner.os == 'Linux'
+        run: xvfb-run -a uv run python -m wowfish.gui.launcher --smoke-test checks/linux-gui.json
+      - name: Windows desktop self-test
+        if: runner.os == 'Windows'
+        run: uv run python -m wowfish.gui.launcher --smoke-test checks/windows-gui.json
+      - name: Build Windows EXEs
+        if: runner.os == 'Windows'
+        run: uv run pyinstaller --clean --noconfirm packaging/wowfish.spec
+      - name: Exercise built Windows EXE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $report = Join-Path $env:GITHUB_WORKSPACE 'checks/windows-exe.json'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'dist/ForeverFishing.exe'
+          $process = Start-Process -FilePath $exe -ArgumentList "--smoke-test `"$report`"" -PassThru
+          if (-not $process.WaitForExit(60000)) {
+            $process | Stop-Process -Force
+            throw 'The built EXE did not finish its GUI self-test within 60 seconds'
+          }
+          if ($process.ExitCode -ne 0) { throw "GUI self-test failed with exit code $($process.ExitCode)" }
+          $result = Get-Content $report -Raw -Encoding utf8 | ConvertFrom-Json
+          if (-not $result.ok -or -not $result.frozen) { throw 'The frozen GUI report is not successful' }
+          Get-Content $report -Raw -Encoding utf8
+          & .\dist\ForeverFishing-CLI.exe --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & .\dist\ForeverFishing-CLI.exe doctor
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: verification-${{ runner.os }}
+          path: checks/
+          if-no-files-found: warn
+      - name: Upload Windows EXEs
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ForeverFishing-Windows-x64
+          path: dist/*.exe
+          if-no-files-found: error

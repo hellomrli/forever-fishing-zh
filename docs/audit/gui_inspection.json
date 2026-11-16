@@ -1,0 +1,46 @@
+{
+  "root_size": [
+    900,
+    640
+  ],
+  "setup_requested_size": [
+    914,
+    704
+  ],
+  "setup_actual_size": [
+    880,
+    590
+  ],
+  "controls": [
+    {
+      "widget": "TLabel",
+      "requested_height": 174,
+      "actual_height": 174,
+      "top": 10
+    },
+    {
+      "widget": "TLabelframe",
+      "requested_height": 127,
+      "actual_height": 127,
+      "top": 198
+    },
+    {
+      "widget": "TLabelframe",
+      "requested_height": 66,
+      "actual_height": 66,
+      "top": 333
+    },
+    {
+      "widget": "TLabelframe",
+      "requested_height": 173,
+      "actual_height": 169,
+      "top": 407
+    },
+    {
+      "widget": "TLabelframe",
+      "requested_height": 102,
+      "actual_height": 1,
+      "top": 0
+    }
+  ]
+}

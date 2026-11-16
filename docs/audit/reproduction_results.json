@@ -1,0 +1,124 @@
+{
+  "upstream_revision": "7e37aca73e018077087fe8bf34c05fd012babda4",
+  "python": "3.12.16",
+  "results": [
+    {
+      "case": "localized_title",
+      "reproduced": true,
+      "evidence": {
+        "actual_title": "魔兽世界",
+        "engine_requested_title": "World of Warcraft",
+        "gui_requested_title": "World of Warcraft",
+        "audio_pid": null,
+        "expected_pid": 123,
+        "quit_check_reported_closed_while_window_exists": true
+      }
+    },
+    {
+      "case": "stale_capture_bounds",
+      "reproduced": true,
+      "evidence": {
+        "observations": [
+          {
+            "change": "move",
+            "expected_area": {
+              "left": 110,
+              "top": 120,
+              "width": 80,
+              "height": 60
+            },
+            "actual_area": {
+              "left": 10,
+              "top": 20,
+              "width": 80,
+              "height": 60
+            },
+            "shape": [
+              60,
+              80,
+              3
+            ]
+          },
+          {
+            "change": "resize",
+            "expected_area": {
+              "left": 10,
+              "top": 20,
+              "width": 100,
+              "height": 90
+            },
+            "actual_area": {
+              "left": 10,
+              "top": 20,
+              "width": 80,
+              "height": 60
+            },
+            "shape": [
+              60,
+              80,
+              3
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "case": "single_frame_false_catch",
+      "reproduced": true,
+      "evidence": {
+        "failed_tracking_frames": 1,
+        "counted_catches": 1,
+        "bobber_still_visible_on_next_frame": true
+      }
+    },
+    {
+      "case": "stale_config_overwrite",
+      "reproduced": true,
+      "evidence": {
+        "size_before_saving_audio_device": 53,
+        "size_after": 0
+      }
+    },
+    {
+      "case": "config_validation_and_encoding",
+      "reproduced": true,
+      "evidence": {
+        "invalid_cast_key_accepted": "not-a-key",
+        "empty_interact_key_accepted": true,
+        "encoding_environment": "simulated Windows CP936 default",
+        "config_upgrade_error_after_saving_chinese_device": "UnicodeDecodeError"
+      }
+    },
+    {
+      "case": "focused_loop_busy_spin",
+      "reproduced": true,
+      "evidence": {
+        "iterations": 205672,
+        "sleep_calls": 0,
+        "wall_seconds": 1.0,
+        "engine_thread_cpu_seconds": 0.9999,
+        "cpu_to_wall_ratio": 0.9999,
+        "scope": "real engine and detector, empty audio and simulated capture; not a game benchmark"
+      }
+    },
+    {
+      "case": "audio_timeout_undercount",
+      "reproduced": true,
+      "evidence": {
+        "configured_timeout_seconds": 5.0,
+        "simulated_elapsed_seconds": 105.205,
+        "error_message": "no audio from process 123 for 5 s",
+        "condition": "no packets and the capture event remains unsignaled"
+      }
+    },
+    {
+      "case": "meter_open_error_not_reported",
+      "reproduced": true,
+      "evidence": {
+        "worker_error": "simulated device open failure",
+        "gui_error_lines": [],
+        "listening": false
+      }
+    }
+  ]
+}
