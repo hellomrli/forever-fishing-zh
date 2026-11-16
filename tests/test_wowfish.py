@@ -88,7 +88,7 @@ def test_older_config_gains_new_settings_at_launch(tmp_path, monkeypatch):
     stay, a second start leaves the file alone, a file that does not parse is left for
     load_config to report, no file is created where there was none, and nothing is written if
     the merge would change a value already there."""
-    monkeypatch.setenv("WOWFISH_HOME", str(tmp_path))
+    monkeypatch.setenv("FOREVERFISH_HOME", str(tmp_path))
     path = tmp_path / "config" / "config.toml"
     path.parent.mkdir()
 
@@ -139,7 +139,7 @@ def test_older_config_gains_new_settings_at_launch(tmp_path, monkeypatch):
 def test_logging_works_without_stderr(tmp_path, monkeypatch):
     """wowfish-gui.exe is built without a console, so on Windows Python sets sys.stderr to None.
     Logging setup must not crash there, and the log file must still be written."""
-    monkeypatch.setenv("WOWFISH_HOME", str(tmp_path))
+    monkeypatch.setenv("FOREVERFISH_HOME", str(tmp_path))
     monkeypatch.setattr(sys, "stderr", None)
     try:
         log_path = _setup_logging()
@@ -376,7 +376,7 @@ def test_macos_listens_to_blackhole(monkeypatch, tmp_path):
 
     mics = [mic(4, "MacBook Pro Microphone"), mic(42, "BlackHole 16ch"), mic(43, "BlackHole 2ch")]
     soundcard = SimpleNamespace(all_microphones=lambda: list(mics), default_speaker=lambda: None)
-    monkeypatch.setenv("WOWFISH_HOME", str(tmp_path))
+    monkeypatch.setenv("FOREVERFISH_HOME", str(tmp_path))
     monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(devices, "_soundcard", lambda: soundcard)
     found = [(d.id, d.is_default) for d in devices.list_loopback_devices()]

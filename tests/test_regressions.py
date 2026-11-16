@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import weakref
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -39,6 +40,7 @@ from wowfish.config import (
     RunConfig,
     VisionConfig,
     add_missing_settings,
+    ensure_config_file,
     load_config,
     recover_config,
     update_config,
@@ -625,8 +627,7 @@ def test_reconnection_budget_is_not_reset_by_empty_reads():
 
 def test_streaming_recording_does_not_accumulate_samples(tmp_path):
     samples = np.asarray([0.5, -0.5, 0.25, -0.25], np.float32)
-    inner = SimpleNamespace(sample_rate=22050, name="测试音频")
-    inner.__enter__ = lambda: inner
+    references = []
 
     class Repeating:
         sample_rate = 22050
@@ -636,20 +637,37 @@ def test_streaming_recording_does_not_accumulate_samples(tmp_path):
             return self
 
         def read(self, count):
-            return samples
+            chunk = np.tile(samples, 1024)
+            references.append(weakref.ref(chunk))
+            return chunk
 
         def __exit__(self, *exc):
             pass
 
     path = tmp_path / "中文录音.wav"
     with RecordingSource(Repeating(), path) as source:
-        for _ in range(1000):
-            source.read(4)
-        assert path.stat().st_size > 4000
-        assert not any(isinstance(v, list) for v in vars(source).values())
+        for _ in range(256):
+            source.read(4096)
+        assert path.stat().st_size > 1_000_000
+        assert all(reference() is None for reference in references)
     saved, rate = read_wav(path)
-    assert rate == 22050 and len(saved) == 4000
+    assert rate == 22050 and len(saved) == 256 * 4096
     np.testing.assert_allclose(saved[:4], samples, atol=1 / 32767)
+
+
+@pytest.mark.parametrize("prefer_new", [True, False])
+def test_legacy_home_fallback_and_preferred_home(tmp_path, monkeypatch, prefer_new):
+    from wowfish import paths
+
+    legacy, current = tmp_path / "旧目录", tmp_path / "新目录"
+    monkeypatch.setenv("WOWFISH_HOME", str(legacy))
+    if prefer_new:
+        monkeypatch.setenv("FOREVERFISH_HOME", str(current))
+    else:
+        monkeypatch.delenv("FOREVERFISH_HOME")
+    wanted = current if prefer_new else legacy
+    assert paths.config_file() == wanted / "config" / "config.toml"
+    assert ensure_config_file()
 
 
 def test_visual_confirmation_rejects_other_sound_before_interacting():
