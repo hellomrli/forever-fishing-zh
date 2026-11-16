@@ -30,12 +30,12 @@ jobs:
         with:
           python-version: '3.12'
           enable-cache: true
-      - name: Install Chinese fonts for Linux desktop checks
+      - name: Install X11 fonts for Linux Tk desktop checks
         if: runner.os == 'Linux'
         run: |
+          # The managed Linux Tk uses X11 core fonts rather than Fontconfig.
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y fonts-noto-cjk
-          fc-cache -f
+          sudo apt-get install --no-install-recommends -y xfonts-base xfonts-scalable xfonts-wqy
       - name: Install managed Python with Tk on Linux
         if: runner.os == 'Linux'
         run: |
