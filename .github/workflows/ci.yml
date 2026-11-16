@@ -30,7 +30,14 @@ jobs:
         with:
           python-version: '3.12'
           enable-cache: true
-      - run: uv sync --locked --group dev
+      - name: Install managed Python with Tk on Linux
+        if: runner.os == 'Linux'
+        run: |
+          uv python install 3.12
+          uv sync --locked --group dev --managed-python
+      - name: Sync Windows dependencies
+        if: runner.os == 'Windows'
+        run: uv sync --locked --group dev
       - name: Lint and format
         run: |
           uv run ruff check .
