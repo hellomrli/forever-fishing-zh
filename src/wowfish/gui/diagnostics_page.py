@@ -112,6 +112,8 @@ class DiagnosticsPage:
         import ttkbootstrap as tb
 
         self.p = presenter
+        self._audio_status_shown = False
+        self._cal_status_shown = False
         self.scroll = ScrollFrame(parent)
         self.frame, f = self.scroll.frame, self.scroll.content
         self.picker: RegionPicker | None = None
@@ -299,6 +301,7 @@ class DiagnosticsPage:
 
     def _cancel(self) -> None:
         self.p.cancel_workers()
+        self._audio_status_shown = self._cal_status_shown = True
         self.audio_note.configure(text="已请求取消，设备正在关闭。")
         self.cal_note.configure(text="已请求取消，当前任务结束后可重试。")
 
@@ -377,8 +380,26 @@ class DiagnosticsPage:
             self.source.configure(text=f"实际音频来源：{view.audio_name}")
         if view.verify_status:
             self.audio_note.configure(text=view.verify_status, bootstyle="info")
+            self._audio_status_shown = True
+        elif view.activity_status:
+            self.audio_note.configure(text=view.activity_status, bootstyle="info")
+            self._audio_status_shown = True
+        elif self._audio_status_shown:
+            self._audio_status_shown = False
+            self.audio_note.configure(
+                text=(
+                    "正在试听，请切回游戏观察音量和水花得分。"
+                    if view.listening
+                    else "任务已结束，可以重新试听或录音验证。"
+                ),
+                bootstyle="secondary",
+            )
         if view.calibrate_status:
             self.cal_note.configure(text=view.calibrate_status, bootstyle="info")
+            self._cal_status_shown = True
+        elif self._cal_status_shown and not view.working:
+            self._cal_status_shown = False
+            self.cal_note.configure(text="任务已结束，可以重新校准或截图。", bootstyle="secondary")
         self.error.configure(text=view.error[:320])
         self._update_region_note()
         for item, line in zip(view.log_events, view.new_lines, strict=True):

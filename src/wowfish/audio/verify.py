@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -18,10 +18,14 @@ def score_recording(
     rate: int,
     fingerprints: Sequence[Fingerprint],
     p: MelParams = DEFAULT_MEL,
+    *,
+    cancel: Callable[[], bool] | None = None,
 ) -> dict[str, np.ndarray]:
+    if cancel is not None and cancel():
+        raise InterruptedError("音频分析已取消")
     y = resample(np.asarray(samples, dtype=np.float32), rate, p.sample_rate)
-    feats = log_mel(y, p)
-    return {fp.name: score_sequence(feats, fp) for fp in fingerprints}
+    feats = log_mel(y, p, cancel=cancel)
+    return {fp.name: score_sequence(feats, fp, cancel=cancel) for fp in fingerprints}
 
 
 def _onset_time(frame: int, fp: Fingerprint, p: MelParams) -> float:
@@ -96,12 +100,14 @@ def bite_report(
     half = int(separation_s / p.frame_s)
     work = best.copy()
     peaks: list[ClipScore] = []
+    peak_frames: list[int] = []
     while len(peaks) < MAX_PEAKS:
         i = int(np.argmax(work))
         if work[i] < PEEL_MIN:
             break
         fp = members[int(which[i])]
         peaks.append(ClipScore(fp.name, float(best[i]), _onset_time(i, fp, p)))
+        peak_frames.append(i)
         work[max(0, i - half) : i + half + 1] = -1.0
     k = sum(1 for c in peaks if c.score >= MIN_BITE)
     while k > 0:
@@ -111,8 +117,7 @@ def bite_report(
         k -= 1
     bites = tuple(peaks[:k])
     rest = best.copy()
-    for c in bites:
-        i = int(np.argmin(np.abs(np.arange(len(best)) * p.frame_s - c.t)))
+    for i in peak_frames[:k]:
         rest[max(0, i - half) : i + half + 1] = -1.0
     floor = float(rest.max()) if len(rest) else -1.0
     threshold = float(min(0.9, max(0.5, round(floor + FLOOR_MARGIN, 2))))

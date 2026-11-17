@@ -1,6 +1,6 @@
 [project]
 name = "forever-fishing-zh"
-version = "1.0.0"
+version = "1.0.1"
 description = "Forever 钓鱼助手：中文界面、图像与音频识别"
 readme = "README.md"
 license = "MIT"

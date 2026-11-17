@@ -39,55 +39,81 @@ class ThreadedSource:
         self._frames = 0
         self._lock = threading.Lock()
         self._stop = threading.Event()
+        self._cancelled = threading.Event()  # survives reader generations during reconnect
         self._ready = threading.Event()
         self.error: BaseException | None = None
         self._thread = threading.Thread(target=self._run, name="wowfish-audio", daemon=True)
 
     def __enter__(self) -> ThreadedSource:
-        self._thread.start()
-        deadline = time.monotonic() + 8.0
-        while not self._ready.wait(0.05):
-            if self._stop.is_set():
-                raise RuntimeError("音频设备启动已取消")
-            if time.monotonic() >= deadline:
-                self.cancel()
-                raise RuntimeError("音频设备启动超时")
-        if self._stop.is_set():
+        if self._cancelled.is_set():
+            self._stop_reader()
             raise RuntimeError("音频设备启动已取消")
-        if self.error is not None:
-            raise RuntimeError(f"音频设备打开失败：{self.error}") from self.error
+        try:
+            self._thread.start()
+            deadline = time.monotonic() + 8.0
+            while not self._ready.wait(0.05):
+                if self._cancelled.is_set():
+                    raise RuntimeError("音频设备启动已取消")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("音频设备启动超时")
+            if self._cancelled.is_set():
+                raise RuntimeError("音频设备启动已取消")
+            if self.error is not None:
+                raise RuntimeError(f"音频设备打开失败：{self.error}") from self.error
+        except BaseException:
+            self._stop_reader()
+            self.wait_closed(JOIN_S)
+            raise
         self.name = getattr(self.inner, "name", self.name)
         return self
 
     def __exit__(self, *exc: object) -> None:
         self.cancel()
-        self._thread.join(JOIN_S)
+        self.wait_closed(JOIN_S)
+
+    def is_alive(self) -> bool:
+        """The reader still owns its device, including while its context is closing."""
+        return self._thread.is_alive()
+
+    def wait_closed(self, timeout: float = JOIN_S) -> None:
+        if self._thread.ident is not None:
+            self._thread.join(timeout)
 
     @property
     def fallback_reason(self) -> str:
         return str(getattr(self.inner, "fallback_reason", ""))
 
     def cancel(self) -> None:
+        self._cancelled.set()
+        self._stop_reader()
+
+    def _stop_reader(self) -> None:
         self._stop.set()
         cancel = getattr(self.inner, "cancel", None)
         if cancel is not None:
             cancel()
 
     def restart(self) -> None:
-        self.cancel()
-        self._thread.join(JOIN_S)
+        if self._cancelled.is_set():
+            raise RuntimeError("音频重新连接已取消")
+        self._stop_reader()
+        self.wait_closed(JOIN_S)
         if self._thread.is_alive():
             raise RuntimeError("旧音频设备仍在关闭，请停止后重新开始")
-        inner = self._factory() if self._factory is not None else self.inner
-        fresh = ThreadedSource(inner, block=self.block, max_s=self._max_s, factory=self._factory)
-        self.__dict__.update(fresh.__dict__)
-        # The thread's bound target must belong to this instance, not the temporary instance.
+        self.inner = self._factory() if self._factory is not None else self.inner
+        self.sample_rate = int(self.inner.sample_rate)
+        self.name = getattr(self.inner, "name", type(self.inner).__name__)
+        self._max_frames = max(1, int(self._max_s * self.sample_rate))
+        self.clear()
+        self.error = None
+        self._ready.clear()
+        self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="foreverfish-audio", daemon=True)
         self.__enter__()
 
     def _run(self) -> None:
         try:
-            if self._stop.is_set():
+            if self._stop.is_set() or self._cancelled.is_set():
                 return
             # Open/read/close all run on this thread: COM interfaces keep their owning thread.
             with self.inner:
@@ -95,7 +121,7 @@ class ThreadedSource:
                 self.sample_rate = int(self.inner.sample_rate)
                 self._max_frames = max(1, int(self._max_s * self.sample_rate))
                 self._ready.set()
-                while not self._stop.is_set():
+                while not self._stop.is_set() and not self._cancelled.is_set():
                     samples = np.asarray(self.inner.read(self.block), dtype=np.float32)
                     if not len(samples):
                         if getattr(self.inner, "exhausted", False):

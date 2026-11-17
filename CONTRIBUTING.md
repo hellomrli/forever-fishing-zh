@@ -29,4 +29,4 @@ Windows 自检还会创建一个中文测试窗口，检查原生枚举、移动
 
 界面只在 Tk 主线程更新；COM 音频设备必须在自己的读取线程打开和释放。保存配置请使用 `update_config` 读取最新状态并修改目标字段，避免写入过期的整个配置快照。
 
-发布时更新 `pyproject.toml`、`src/wowfish/__init__.py` 的备用版本、`packaging/windows_version.txt` 及 `docs/releases/` 说明。待 CI 通过后创建对应 `vX.Y.Z` 标签；Release Windows 工作流会原生构建、自检、生成校验值并发布到 GitHub Releases。
+发布时更新 `pyproject.toml`、`uv.lock`、`src/wowfish/__init__.py` 的备用版本、`packaging/windows_version.txt`、`packaging/windows.manifest` 及 `docs/releases/vX.Y.Z.md` 说明。`scripts/check_release.py` 检查版本一致性、素材和发布说明。待 CI 通过后创建对应 `vX.Y.Z` 标签；Release Windows 工作流会原生构建、自检、生成校验值并发布到 GitHub Releases。

@@ -37,6 +37,11 @@ BLOCK = 1024
 CALIBRATE_WATCH_S = 30.0
 
 
+def _source_alive(source: Any) -> bool:
+    alive = getattr(source, "is_alive", None)
+    return bool(alive is not None and alive())
+
+
 def describe(event: ev.Event) -> str:
     match event:
         case ev.StateChanged(did=did, next=nxt):
@@ -118,6 +123,18 @@ class WorkerFailed:
     message: str
 
 
+@dataclass(frozen=True)
+class _MeterResult:
+    generation: int
+    item: object
+
+
+@dataclass(frozen=True)
+class _TaskResult:
+    task: Task
+    item: object
+
+
 @dataclass
 class ScoreTrace:
     t0: float = 0.0
@@ -149,6 +166,7 @@ class View:
     working: bool = False
     calibration_running: bool = False
     verification_running: bool = False
+    activity_status: str = ""
 
 
 @dataclass
@@ -156,6 +174,9 @@ class Task:
     stop: threading.Event
     thread: threading.Thread
     source: Any = None
+
+    def is_alive(self) -> bool:
+        return self.thread.is_alive() or _source_alive(self.source)
 
 
 class _Meter:
@@ -184,7 +205,12 @@ class _Meter:
         self._stop.set()
         self.source.cancel()
         if wait:
+            deadline = time.monotonic() + 2.0
             self.thread.join(2.0)
+            self.source.wait_closed(max(0.0, deadline - time.monotonic()))
+
+    def is_alive(self) -> bool:
+        return self.thread.is_alive() or self.source.is_alive()
 
     def _run(self) -> None:
         frames = 0
@@ -254,7 +280,10 @@ class Presenter:
         self._results: queue.Queue[object] = queue.Queue()
         self._thread: EngineThread | None = None
         self._meter: _Meter | None = None
+        self._meter_generation = 0
         self._retired_meters: list[_Meter] = []
+        self._retired_audio: list[Any] = []
+        self._pending_audio: tuple[str, Callable[[], None]] | None = None
         self._workers: dict[str, Task] = {}
         self._worker_lock = threading.Lock()
         self.state, self.did, self.next = (
@@ -444,11 +473,27 @@ class Presenter:
     def start(self, minutes: float | None = None) -> None:
         if self.running:
             return
-        self.stop_meter(wait=True)
-        self.cancel_workers(wait=True)
-        if self.working:
-            self._results.put(WorkerFailed("开始", "旧的校准任务仍在结束，请稍后再开始"))
+        self._request_audio("开始钓鱼", lambda: self._start_engine(minutes), cancel_workers=True)
+
+    def _request_audio(
+        self, name: str, action: Callable[[], None], *, cancel_workers: bool = False
+    ) -> None:
+        if self.running:
+            self._results.put(WorkerFailed(name, "请先停止当前钓鱼"))
             return
+        if self._worker_active() and not cancel_workers:
+            self._results.put(WorkerFailed(name, "请先等待当前任务完成，或取消任务"))
+            return
+        self._pending_audio = None
+        self.stop_meter()
+        if cancel_workers:
+            self.cancel_workers()
+        if self._thread is not None or self._worker_active() or self.audio_closing:
+            self._pending_audio = (name, action)
+        else:
+            action()
+
+    def _start_engine(self, minutes: float | None) -> None:
         try:
             self.reload()
             window = self.resolve_window()
@@ -468,6 +513,7 @@ class Presenter:
         self.state, self.did, self.next = State.IDLE.name, "已启动", "请切回选中的游戏客户端"
 
     def stop(self) -> None:
+        self._pending_audio = None
         if self._thread is not None:
             self._thread.engine.stop()
         self.cancel_workers()
@@ -478,6 +524,7 @@ class Presenter:
             self._thread.engine.toggle_pause()
 
     def shutdown(self) -> None:
+        self._pending_audio = None
         if self._thread is not None:
             self._thread.engine.stop()
         self.stop_meter(wait=True)
@@ -485,7 +532,12 @@ class Presenter:
         for meter in self._retired_meters:
             meter.stop()
             meter.thread.join(max(0.0, deadline - time.monotonic()))
+            meter.source.wait_closed(max(0.0, deadline - time.monotonic()))
         self._retired_meters.clear()
+        for source in self._retired_audio:
+            source.cancel()
+            source.wait_closed(max(0.0, deadline - time.monotonic()))
+        self._retired_audio.clear()
         self.cancel_workers(wait=True)
         if self._thread is not None:
             self._thread.stop(timeout=3.0)
@@ -512,12 +564,31 @@ class Presenter:
                 logger.debug(lines[-1])
                 self._apply(event)
             if not self._thread.is_alive() and q.empty():
+                source = getattr(self._thread.engine, "audio", None)
+                if _source_alive(source):
+                    self._retired_audio.append(source)
                 self._thread = None
+        self._retired_meters = [meter for meter in self._retired_meters if meter.is_alive()]
+        self._retired_audio = [source for source in self._retired_audio if _source_alive(source)]
+        if self._pending_audio and not (
+            self.running or self._worker_active() or self.audio_closing
+        ):
+            _, action = self._pending_audio
+            self._pending_audio = None
+            action()
         while True:
             try:
                 item = self._results.get_nowait()
             except queue.Empty:
                 break
+            if isinstance(item, _MeterResult):
+                if item.generation != self._meter_generation:
+                    continue
+                item = item.item
+            elif isinstance(item, _TaskResult):
+                if item.task.stop.is_set():
+                    continue
+                item = item.item
             items.append(item)
             line = self._describe_result(item)
             lines.append(line)
@@ -542,6 +613,7 @@ class Presenter:
             working=self.working,
             calibration_running=self.task_running("calibrate"),
             verification_running=self.task_running("verify"),
+            activity_status=self.activity_status,
         )
 
     def _apply(self, event: ev.Event) -> None:
@@ -608,7 +680,7 @@ class Presenter:
             self._results.put(WorkerFailed("校准或诊断", "请先停止钓鱼"))
             return
         with self._worker_lock:
-            if any(task.thread.is_alive() for task in self._workers.values()):
+            if self.working:
                 self._results.put(WorkerFailed("启动任务", "请等待当前任务完成，或先取消"))
                 return
             stop = threading.Event()
@@ -619,21 +691,59 @@ class Presenter:
                     target(task)
                 except Exception as e:
                     if not task.stop.is_set():
-                        self._results.put(WorkerFailed("后台任务", str(e)))
+                        self._publish(task, WorkerFailed("后台任务", str(e)))
 
             task.thread = threading.Thread(target=guarded, name=f"foreverfish-{name}", daemon=True)
             self._workers[name] = task
             task.thread.start()
 
+    def _publish(self, task: Task, item: object) -> None:
+        self._results.put(_TaskResult(task, item))
+
     def task_running(self, name: str) -> bool:
         task = self._workers.get(name)
-        return task is not None and task.thread.is_alive()
+        return task is not None and task.is_alive()
+
+    def _worker_active(self) -> bool:
+        return any(task.is_alive() for task in self._workers.values())
+
+    @property
+    def audio_closing(self) -> bool:
+        return (
+            any(meter.is_alive() for meter in self._retired_meters)
+            or any(_source_alive(source) for source in self._retired_audio)
+            or any(
+                not task.thread.is_alive() and _source_alive(task.source)
+                for task in self._workers.values()
+            )
+            or (
+                self._meter is not None
+                and not self._meter.thread.is_alive()
+                and self._meter.source.is_alive()
+            )
+            or (
+                self._thread is not None
+                and not self._thread.is_alive()
+                and _source_alive(getattr(self._thread.engine, "audio", None))
+            )
+        )
+
+    @property
+    def activity_status(self) -> str:
+        if self._pending_audio is not None:
+            return f"正在结束上一任务，完成后自动{self._pending_audio[0]}"
+        if self.audio_closing:
+            return "正在关闭音频设备，请稍候"
+        if any(task.stop.is_set() and task.is_alive() for task in self._workers.values()):
+            return "正在取消任务，请稍候"
+        return ""
 
     @property
     def working(self) -> bool:
-        return any(task.thread.is_alive() for task in self._workers.values())
+        return self._worker_active() or self.audio_closing or self._pending_audio is not None
 
     def cancel_workers(self, wait: bool = False) -> None:
+        self._pending_audio = None
         with self._worker_lock:
             tasks = list(self._workers.values())
         for task in tasks:
@@ -703,19 +813,20 @@ class Presenter:
                         side,
                         side,
                     )
-                    self._results.put(
+                    self._publish(
+                        task,
                         CalibrateDone(
                             cal,
                             image.bgr_to_png_bytes(
                                 image.with_box(thumb, box) if cal.valid else thumb
                             ),
-                        )
+                        ),
                     )
                     return
                 task.stop.wait(0.1)
         except Exception as e:
             if not task.stop.is_set():
-                self._results.put(WorkerFailed("图标校准", str(e)))
+                self._publish(task, WorkerFailed("图标校准", str(e)))
         finally:
             if cap is not None:
                 cap.close()
@@ -733,21 +844,27 @@ class Presenter:
             window = self.resolve_window()
             if window is None:
                 raise RuntimeError("未找到选中的游戏窗口")
+            if window.minimized:
+                raise RuntimeError("游戏窗口已最小化，请恢复窗口后重新截图")
             cap = self._get_capturer(window)
             cap.open(window)
             thumb, _ = image.thumbnail(cap.grab(), width=800)
-            self._results.put(PreviewDone(image.bgr_to_png_bytes(thumb)))
+            self._publish(task, PreviewDone(image.bgr_to_png_bytes(thumb)))
         except Exception as e:
             if not task.stop.is_set():
-                self._results.put(WorkerFailed("获取游戏截图", str(e)))
+                self._publish(task, WorkerFailed("获取游戏截图", str(e)))
         finally:
             if cap is not None:
                 cap.close()
             self.calibrate_status = ""
 
     def record_and_verify(self, seconds: float = 60.0, selector: str | None = None) -> None:
-        self.stop_meter(wait=True)
-        self._launch("verify", lambda task: self._verify_worker(task, seconds, selector))
+        self._request_audio(
+            "录音验证",
+            lambda: self._launch(
+                "verify", lambda task: self._verify_worker(task, seconds, selector)
+            ),
+        )
 
     def _verify_worker(self, task: Task, seconds: float, selector: str | None) -> None:
         from wowfish.audio.clips import build_fingerprints
@@ -764,7 +881,9 @@ class Presenter:
             chunks: list[np.ndarray] = []
             frames = 0
             with source:
-                self.audio_name = source.name
+                if task.stop.is_set():
+                    return
+                self._publish(task, ev.AudioOpened(0.0, source.name, source.fallback_reason))
                 deadline = time.monotonic() + min(seconds, 120.0)
                 while not task.stop.is_set() and time.monotonic() < deadline:
                     samples = source.read(BLOCK)
@@ -787,13 +906,15 @@ class Presenter:
             if len(y) < DEFAULT_MEL.n_fft:
                 raise RuntimeError("没有采集到有效音频，请检查输出设备和音效")
             fps = build_fingerprints()
-            scores = score_recording(y, source.sample_rate, fps, DEFAULT_MEL)
+            scores = score_recording(
+                y, source.sample_rate, fps, DEFAULT_MEL, cancel=task.stop.is_set
+            )
             report = bite_report(scores, fps, DEFAULT_MEL)
             if not task.stop.is_set():
-                self._results.put(VerifyDone(report))
+                self._publish(task, VerifyDone(report))
         except Exception as e:
             if not task.stop.is_set():
-                self._results.put(WorkerFailed("录音验证", str(e)))
+                self._publish(task, WorkerFailed("录音验证", str(e)))
         finally:
             self._record_level = None
             self.verify_status = ""
@@ -802,11 +923,19 @@ class Presenter:
         def worker(task: Task) -> None:
             from wowfish.doctor import default_probes, run_probes
 
-            results = run_probes(default_probes(window=self.resolve_window()))
-            if not task.stop.is_set():
-                self._results.put(DiagnosticsDone(results))
+            def track_audio(source: ThreadedSource) -> None:
+                task.source = source
+                if task.stop.is_set():
+                    source.cancel()
 
-        self._launch("diagnostics", worker)
+            results = run_probes(
+                default_probes(window=self.resolve_window(), on_audio_source=track_audio),
+                cancel=task.stop.is_set,
+            )
+            if not task.stop.is_set():
+                self._publish(task, DiagnosticsDone(results))
+
+        self._request_audio("运行环境诊断", lambda: self._launch("diagnostics", worker))
 
     @property
     def level_dbfs(self) -> float:
@@ -829,29 +958,35 @@ class Presenter:
         return self._meter is not None and self._meter.thread.is_alive()
 
     def start_meter(self, selector: str | None = None) -> None:
+        self._request_audio("试听", lambda: self._start_meter(selector))
+
+    def _start_meter(self, selector: str | None) -> None:
         from wowfish.audio.detector import detector_for
 
-        self.stop_meter()
-        if self.running or self.working:
-            self._results.put(WorkerFailed("试听", "请先停止当前钓鱼或校准任务"))
-            return
+        generation = self._meter_generation
+        self.error = self.audio_name = ""
         try:
             source = self._open_audio(selector)
             detector = detector_for(self.cfg.audio)
             self._meter = _Meter(
                 source,
                 detector,
-                lambda e: self._results.put(WorkerFailed("试听", str(e))),
-                lambda name, reason: self._results.put(ev.AudioOpened(0.0, name, reason)),
+                lambda e: self._results.put(_MeterResult(generation, WorkerFailed("试听", str(e)))),
+                lambda name, reason: self._results.put(
+                    _MeterResult(generation, ev.AudioOpened(0.0, name, reason))
+                ),
             )
             self._meter.start()
         except Exception as e:
-            self._results.put(WorkerFailed("试听", str(e)))
+            self._results.put(_MeterResult(generation, WorkerFailed("试听", str(e))))
 
     def stop_meter(self, wait: bool = False) -> None:
+        self._meter_generation += 1
+        if self._pending_audio is not None and self._pending_audio[0] == "试听":
+            self._pending_audio = None
         if self._meter is not None:
             self._meter.stop(wait)
-            if self._meter.thread.is_alive():
+            if self._meter.is_alive():
                 self._retired_meters.append(self._meter)
             self._meter = None
-        self._retired_meters = [meter for meter in self._retired_meters if meter.thread.is_alive()]
+        self._retired_meters = [meter for meter in self._retired_meters if meter.is_alive()]

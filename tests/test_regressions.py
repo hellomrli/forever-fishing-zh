@@ -49,7 +49,7 @@ from wowfish.engine import events as ev
 from wowfish.engine.engine import FishingEngine
 from wowfish.engine.state import State
 from wowfish.gui.hotkeys import HOTKEY_PAUSE, HOTKEY_STOP, MOD_NOREPEAT, HotkeyManager
-from wowfish.gui.presenter import CalibrateDone, Presenter, WorkerFailed
+from wowfish.gui.presenter import CalibrateDone, Presenter, VerifyDone, WorkerFailed
 from wowfish.vision.bite import VisualBiteVerifier
 from wowfish.vision.calibrate import Calibration, calibrate_icon_scale
 from wowfish.vision.imageio import read_image, write_image
@@ -419,6 +419,56 @@ def test_pause_and_resize_resume_with_a_new_cast_and_never_switch_pid():
     assert e.state is State.STOPPED and io.pressed == ["1", "1"]
 
 
+@pytest.mark.parametrize("interruption", ["pause", "focus"])
+def test_interrupted_lure_is_reapplied_after_resume(interruption):
+    io = FakeIO()
+    cfg = Config(GameConfig(lure_key="3"), VisionConfig(confirm_bite=False), AudioConfig())
+    e = engine(io, cfg=cfg)
+
+    def interrupt(seconds):
+        io.sleep(seconds)
+        if io.t >= 0.2:
+            if interruption == "pause":
+                e.pause()
+            else:
+                io.focused = False
+
+    e._sleep = interrupt
+    e.step()
+    assert e._lure_at is None, "An interrupted lure must not be recorded as applied"
+    assert io.t < 0.4 and e.state is State.PAUSED
+    assert io.pressed == ["3"]
+    assert any(isinstance(item, ev.Paused) for item in e.events.queue)
+
+    io.focused = True
+    e.resume()
+    e._sleep = io.sleep
+    e.step()
+    assert io.pressed == ["3", "3"] and e._lure_at is not None
+    e.step()
+    assert io.pressed == ["3", "3", "1"]
+
+
+def test_focus_loss_interrupts_a_long_break_promptly():
+    io = FakeIO()
+    cfg = Config(
+        GameConfig(),
+        VisionConfig(confirm_bite=False),
+        AudioConfig(),
+        run=RunConfig(pause_min_s=120, pause_max_s=120),
+    )
+    e = engine(io, cfg=cfg)
+
+    def lose_focus(seconds):
+        io.sleep(seconds)
+        io.focused = False
+
+    e._sleep = lose_focus
+    e._pause_then_idle("收杆确认完成")
+    assert io.t < 0.3 and e.state is State.PAUSED
+    assert io.pressed == []
+
+
 def test_wasapi_timeout_counts_packet_wait_and_silence_can_continue():
     clock = SimpleNamespace(t=0.0)
 
@@ -478,6 +528,14 @@ class BlockingSource:
         self.closed.set()
 
 
+class BufferedSource(BlockingSource):
+    exhausted = False
+
+    def read(self, count):
+        self.exhausted = True
+        return np.zeros(2048, np.float32)
+
+
 def test_audio_open_read_close_share_one_thread_and_read_is_nonblocking():
     inner = BlockingSource()
     source = ThreadedSource(inner)
@@ -489,6 +547,42 @@ def test_audio_open_read_close_share_one_thread_and_read_is_nonblocking():
     assert inner.closed.is_set()
     assert len(set(inner.owners)) == 1 and inner.owners[0] != threading.get_ident()
     assert not source._thread.is_alive()
+
+
+def test_cancellation_during_reconnect_is_not_lost():
+    first, second = BlockingSource(), BlockingSource()
+
+    def fresh_source():
+        source.cancel()
+        return second
+
+    source = ThreadedSource(first, factory=fresh_source)
+    try:
+        source.__enter__()
+        with pytest.raises(RuntimeError, match="取消"):
+            source.restart()
+        assert first.closed.is_set() and not second.entered.is_set()
+    finally:
+        source.__exit__(None, None, None)
+
+
+def test_a_failed_reconnect_can_be_retried():
+    class Failed(BlockingSource):
+        def __enter__(self):
+            raise AudioUnavailable("设备暂时不可用")
+
+    first, recovered = BlockingSource(), BlockingSource()
+    devices = deque([Failed(), recovered])
+    source = ThreadedSource(first, factory=devices.popleft)
+    try:
+        source.__enter__()
+        with pytest.raises(RuntimeError, match="暂时不可用"):
+            source.restart()
+        source.restart()
+        assert recovered.entered.is_set() and source.is_alive()
+    finally:
+        source.__exit__(None, None, None)
+    assert first.closed.is_set() and recovered.closed.is_set()
 
 
 def test_threaded_audio_buffer_is_bounded_and_eof_waits_for_draining():
@@ -534,6 +628,193 @@ def test_meter_failure_is_reported_without_unhandled_thread_error(monkeypatch):
     assert any(isinstance(item, WorkerFailed) for item in view.log_events)
     assert not failures
     p.shutdown()
+
+
+@pytest.mark.parametrize("action", ["listen", "verify", "start", "diagnostics"])
+def test_audio_switch_waits_for_the_reader_to_close_and_continues_automatically(
+    action, monkeypatch
+):
+    import wowfish.audio._threaded as threaded
+
+    monkeypatch.setattr(threaded, "JOIN_S", 0.02)
+    closing, release = threading.Event(), threading.Event()
+
+    class SlowClose(BlockingSource):
+        def __exit__(self, *exc):
+            closing.set()
+            release.wait(3)
+            super().__exit__(*exc)
+
+    first, second = SlowClose(), BlockingSource()
+    requests, builds = [], []
+
+    def open_audio(*args, **kwargs):
+        requests.append(args)
+        return first if len(requests) == 1 else second
+
+    def build(*args, **kwargs):
+        builds.append(kwargs)
+        raise RuntimeError("测试在设备释放后到达引擎构建")
+
+    if action == "diagnostics":
+        monkeypatch.setattr("wowfish.audio.devices.open_capture", open_audio)
+
+    p = Presenter(
+        list_devices=lambda: [],
+        find_window=lambda _: FakeIO().window,
+        open_capture=open_audio,
+        build_engine=build,
+    )
+    try:
+        p.start_meter("first")
+        assert first.entered.wait(1)
+        retired = p._meter
+        p.stop_meter()
+        assert closing.wait(1)
+        retired.thread.join(0.5)
+        assert not retired.thread.is_alive() and not first.closed.is_set()
+
+        started = time.monotonic()
+        if action == "listen":
+            p.start_meter("second")
+        elif action == "verify":
+            p.record_and_verify(60, "second")
+        elif action == "start":
+            p.start()
+        else:
+            p.run_diagnostics()
+        assert time.monotonic() - started < 0.2
+        view = p.poll()
+        assert view.working and view.activity_status
+        assert len(requests) == 1 and not builds and not second.entered.is_set()
+
+        release.set()
+        deadline = time.monotonic() + 2
+        while not (builds if action == "start" else second.entered.is_set()):
+            assert time.monotonic() < deadline, "The requested action did not resume"
+            p.poll()
+            time.sleep(0.005)
+        assert first.closed.is_set()
+    finally:
+        release.set()
+        p.shutdown()
+
+
+def test_stopping_cancels_pending_audio_switch(monkeypatch):
+    import wowfish.audio._threaded as threaded
+
+    monkeypatch.setattr(threaded, "JOIN_S", 0.02)
+    release = threading.Event()
+
+    class SlowClose(BlockingSource):
+        def __exit__(self, *exc):
+            release.wait(3)
+            super().__exit__(*exc)
+
+    first, second = SlowClose(), BlockingSource()
+    sources = deque([first, second])
+    p = Presenter(
+        list_devices=lambda: [],
+        find_window=lambda _: None,
+        open_capture=lambda *args, **kwargs: sources.popleft(),
+    )
+    try:
+        p.start_meter("first")
+        assert first.entered.wait(1)
+        p.start_meter("second")
+        assert p.poll().working
+        p.stop()
+        release.set()
+        deadline = time.monotonic() + 2
+        while p.working:
+            assert time.monotonic() < deadline
+            p.poll()
+            time.sleep(0.005)
+        p.poll()
+        assert not second.entered.is_set() and len(sources) == 1
+    finally:
+        release.set()
+        p.shutdown()
+
+
+def test_retired_meter_results_do_not_replace_current_feedback():
+    inner = BlockingSource()
+    p = Presenter(
+        list_devices=lambda: [],
+        find_window=lambda _: None,
+        open_capture=lambda *args, **kwargs: inner,
+    )
+    try:
+        p.start_meter("test")
+        assert inner.entered.wait(1)
+        deadline = time.monotonic() + 1
+        while p._results.empty():
+            assert time.monotonic() < deadline
+            time.sleep(0.005)
+        p.stop_meter(wait=True)
+        p.error = "当前操作的提示"
+        view = p.poll()
+        assert view.audio_name == "" and view.error == "当前操作的提示"
+        assert not any(isinstance(item, ev.AudioOpened) for item in view.log_events)
+    finally:
+        p.shutdown()
+
+
+def test_finished_engine_keeps_its_closing_reader_until_the_next_start(monkeypatch):
+    import wowfish.audio._threaded as threaded
+
+    monkeypatch.setattr(threaded, "JOIN_S", 0.02)
+    closing, release = threading.Event(), threading.Event()
+
+    class SlowClose(BlockingSource):
+        def __exit__(self, *exc):
+            closing.set()
+            release.wait(3)
+            super().__exit__(*exc)
+
+    inner = SlowClose()
+    requests = []
+
+    class ShortEngine:
+        def __init__(self):
+            self.events = queue.Queue()
+            self.audio = ThreadedSource(inner)
+            self.detector = SimpleNamespace(level_dbfs=-120, last_scores=())
+
+        def run(self):
+            with self.audio:
+                self.events.put(ev.Stopped(0, "user"))
+
+        def stop(self):
+            self.audio.cancel()
+
+    def build(*args, **kwargs):
+        requests.append(kwargs)
+        if len(requests) > 1:
+            raise RuntimeError("第二次开始已到达")
+        return ShortEngine()
+
+    p = Presenter(
+        list_devices=lambda: [], find_window=lambda _: FakeIO().window, build_engine=build
+    )
+    try:
+        p.start()
+        assert closing.wait(1)
+        p._thread._thread.join(0.5)
+        assert not p.running and not inner.closed.is_set()
+        p.start()
+        view = p.poll()
+        assert view.working and view.activity_status and len(requests) == 1
+        release.set()
+        deadline = time.monotonic() + 2
+        while len(requests) < 2:
+            assert time.monotonic() < deadline
+            p.poll()
+            time.sleep(0.005)
+        assert inner.closed.is_set()
+    finally:
+        release.set()
+        p.shutdown()
 
 
 def test_audio_fallback_reports_actual_device_and_closes_failed_primary():
@@ -583,6 +864,83 @@ def test_cancel_verification_closes_its_blocking_reader_promptly():
     assert inner.closed.wait(1) and not p.working
     assert not any(isinstance(x, WorkerFailed) for x in p.poll().log_events)
     p.shutdown()
+
+
+def test_cancel_verification_also_interrupts_the_analysis(monkeypatch):
+    analyzing, release = threading.Event(), threading.Event()
+    observed = []
+
+    def analyze(samples, rate, fingerprints, params, *, cancel=None):
+        observed.append(cancel)
+        analyzing.set()
+        while not release.wait(0.005):
+            if cancel is not None and cancel():
+                raise InterruptedError("音频分析已取消")
+        return {fp.name: np.full(1, -1, np.float32) for fp in fingerprints}
+
+    monkeypatch.setattr("wowfish.audio.verify.score_recording", analyze)
+    p = Presenter(
+        list_devices=lambda: [],
+        find_window=lambda _: None,
+        open_capture=lambda *args, **kwargs: BufferedSource(),
+    )
+    try:
+        p.record_and_verify(1, "test")
+        assert analyzing.wait(2) and callable(observed[0])
+        p.cancel_workers(wait=True)
+        assert not p.working and not p.verify_status
+        view = p.poll()
+        assert not any(isinstance(item, (WorkerFailed, VerifyDone)) for item in view.log_events)
+    finally:
+        release.set()
+        p.shutdown()
+
+
+def test_cancelled_verification_does_not_publish_an_already_queued_result():
+    p = Presenter(
+        list_devices=lambda: [],
+        find_window=lambda _: None,
+        open_capture=lambda *args, **kwargs: BufferedSource(),
+    )
+    try:
+        p.record_and_verify(1, "test")
+        p._workers["verify"].thread.join(2)
+        assert not p.working and not p._results.empty()
+        p.cancel_workers()
+        p.error = "当前操作的提示"
+        view = p.poll()
+        assert not view.log_events and view.error == "当前操作的提示"
+    finally:
+        p.shutdown()
+
+
+def test_cancelling_diagnostics_closes_the_opening_device_and_skips_remaining_checks(monkeypatch):
+    from wowfish import doctor
+
+    class Opening(BlockingSource):
+        def __enter__(self):
+            super().__enter__()
+            self.cancelled.wait(3)
+            return self
+
+    source = Opening()
+    later_checks = []
+    monkeypatch.setattr("wowfish.audio.devices.open_capture", lambda *args, **kwargs: source)
+    monkeypatch.setattr(doctor, "probe_audio", lambda: doctor.ProbeResult("设备", "warn", "离线"))
+    monkeypatch.setattr(
+        doctor,
+        "probe_input",
+        lambda: later_checks.append("input") or doctor.ProbeResult("输入", "ok", "测试"),
+    )
+    p = Presenter(list_devices=lambda: [], find_window=lambda _: FakeIO().window)
+    try:
+        p.run_diagnostics()
+        assert source.entered.wait(2)
+        p.cancel_workers(wait=True)
+        assert source.closed.wait(1) and not p.working
+        assert not later_checks and not p.poll().log_events
+    finally:
+        p.shutdown()
 
 
 def test_cancellation_prevents_overlapping_calibration_tasks():

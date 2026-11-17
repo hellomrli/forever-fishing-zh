@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import lru_cache
 
 import numpy as np
+from numpy.lib.stride_tricks import sliding_window_view
+
+_FEATURE_BLOCK = 1024
 
 
 @dataclass(frozen=True)
@@ -68,12 +72,22 @@ def _window(n_fft: int) -> np.ndarray:
     return np.hanning(n_fft).astype(np.float32)
 
 
-def log_mel(samples: np.ndarray, p: MelParams) -> np.ndarray:
-    """(T, n_mels) in dB. T = p.frames_for(len(samples)); zero rows when the input is too short."""
+def log_mel(
+    samples: np.ndarray, p: MelParams, *, cancel: Callable[[], bool] | None = None
+) -> np.ndarray:
+    """(T, n_mels) in dB, using bounded FFT batches that can be cancelled."""
+    if cancel is not None and cancel():
+        raise InterruptedError("音频分析已取消")
     n = p.frames_for(len(samples))
     if n == 0:
         return np.zeros((0, p.n_mels), dtype=np.float32)
-    idx = np.arange(p.n_fft)[None, :] + p.hop * np.arange(n)[:, None]
-    frames = np.asarray(samples, dtype=np.float32)[idx] * _window(p.n_fft)
-    power = np.abs(np.fft.rfft(frames, axis=1)) ** 2
-    return (10.0 * np.log10(power @ mel_filterbank(p).T + 1e-10)).astype(np.float32)
+    frames = sliding_window_view(np.asarray(samples, dtype=np.float32), p.n_fft)[:: p.hop]
+    out = np.empty((n, p.n_mels), dtype=np.float32)
+    window, filters = _window(p.n_fft), mel_filterbank(p)
+    for start in range(0, n, _FEATURE_BLOCK):
+        if cancel is not None and cancel():
+            raise InterruptedError("音频分析已取消")
+        block = frames[start : start + _FEATURE_BLOCK] * window
+        power = np.abs(np.fft.rfft(block, axis=1)) ** 2
+        out[start : start + len(block)] = 10.0 * np.log10(power @ filters.T + 1e-10)
+    return out

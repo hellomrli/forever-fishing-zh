@@ -156,7 +156,7 @@ class FishPage:
         if not view.running and self._title_filter != self.p.cfg.game.window_title:
             self.refresh_windows()
         self.state.configure(text=STATE_NAMES.get(view.state, view.state))
-        self.did.configure(text=view.did)
+        self.did.configure(text=view.activity_status or view.did)
         self.next.configure(text=f"下一步：{view.next}")
         self.stats.configure(text=view.stats)
         self.error.configure(text=view.error[:320])
@@ -172,7 +172,7 @@ class FishPage:
             state="normal" if view.running else "disabled",
             text="继续" if self.p.user_paused else "暂停",
         )
-        self.stop.configure(state="normal" if view.running else "disabled")
+        self.stop.configure(state="normal" if view.running or view.working else "disabled")
         self.refresh.configure(state="disabled" if view.running or view.working else "normal")
         self.client.configure(state="disabled" if view.running or view.working else "readonly")
         if view.thumbnail_png is not None and view.thumbnail_png is not self._last_png:

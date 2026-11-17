@@ -213,7 +213,7 @@ class FishingEngine:
 
     # -- the loop body -----------------------------------------------------------------------
 
-    def _step(self, now: float) -> None:
+    def _pause_if_needed(self) -> bool:
         focused = self.input.is_game_focused(self.window)
         if focused is False or self.window.minimized or self._user_paused.is_set():
             if self.state is not State.PAUSED:
@@ -221,6 +221,11 @@ class FishingEngine:
                 self.state = State.PAUSED
                 reason = msg("user_pause") if self._user_paused.is_set() else UNFOCUSED
                 self._emit(ev.Paused(self._t(), reason))
+            return True
+        return False
+
+    def _step(self, now: float) -> None:
+        if self._pause_if_needed():
             self._drain_audio(now)
             return
         if self.state is State.PAUSED:
@@ -257,9 +262,8 @@ class FishingEngine:
             return  # still IDLE: the next step casts
         if self.behavior.jump():
             self._press(self.cfg.behavior.jump_key, "jump")
-            self._wait(self._rng.uniform(*JUMP_LANDING_S))
-            if self._stop or self.input.is_game_focused(self.window) is False:
-                return  # the next step stops or pauses before anything else is pressed
+            if not self._wait(self._rng.uniform(*JUMP_LANDING_S), watch_focus=True):
+                return
             now = self._clock()
         key = self.cfg.game.cast_key
         clear = getattr(self.audio, "clear", None)
@@ -376,13 +380,7 @@ class FishingEngine:
         if self.behavior.skip_bite():
             self._miss(msg("skip"))
             return
-        self._wait(self.behavior.reaction_s())
-        if self._stop or self._user_paused.is_set():
-            return
-        if self.input.is_game_focused(self.window) is False:
-            self._resume_state = State.WAIT_BITE
-            self.state = State.PAUSED
-            self._emit(ev.Paused(self._t(), UNFOCUSED))
+        if not self._wait(self.behavior.reaction_s(), watch_focus=True):
             return
         key = self.cfg.game.interact_key
         if not self._press(key, "bite"):
@@ -438,8 +436,8 @@ class FishingEngine:
             msg("lure", key=key),
             msg("lure_wait", seconds=wait, minutes=self.cfg.game.lure_minutes),
         )
-        self._wait(wait)
-        self._lure_at = self._clock()
+        if self._wait(wait, watch_focus=True):
+            self._lure_at = self._clock()
 
     # -- helpers -----------------------------------------------------------------------------
 
@@ -590,22 +588,25 @@ class FishingEngine:
             nxt = msg("recast", seconds=pause)
         self._change(State.IDLE, did, nxt)
         self._icon_xy = None
-        self._wait(rest + pause)
+        self._wait(rest + pause, watch_focus=True)
 
-    def _wait(self, seconds: float) -> None:
-        """Sleep in short slices so Stop still ends the run promptly."""
-        remaining = seconds
-        while (
-            remaining > 0
-            and not self._stop
-            and (not self._user_paused.is_set() or self.state is State.PAUSED)
-        ):
+    def _wait(self, seconds: float, *, watch_focus: bool = False) -> bool:
+        """Return whether the wait completed; gameplay delays also pause on focus loss."""
+        deadline = self._clock() + seconds
+        while not self._stop:
+            if watch_focus and self._pause_if_needed():
+                return False
+            if self._user_paused.is_set() and self.state is not State.PAUSED:
+                return False
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                return True
             step = min(SLEEP_SLICE_S, remaining)
             if self._real_sleep:
                 self._stop_event.wait(step)
             else:
                 self._sleep(step)
-            remaining -= step
+        return False
 
     def _drain_audio(self, now: float) -> list[AudioChunk]:
         rate = self.audio.sample_rate

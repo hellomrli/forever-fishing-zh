@@ -8,11 +8,14 @@ import shutil
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from wowfish import APP_TITLE, __version__, paths
 from wowfish.capture import WindowRef, find_window, linux_hyprland, macos
 from wowfish.messages import error_text
+
+if TYPE_CHECKING:
+    from wowfish.audio._threaded import ThreadedSource
 
 Level = Literal["ok", "warn", "fail"]
 
@@ -27,9 +30,13 @@ class ProbeResult:
 Probe = Callable[[], ProbeResult]
 
 
-def run_probes(probes: Sequence[Probe]) -> list[ProbeResult]:
+def run_probes(
+    probes: Sequence[Probe], *, cancel: Callable[[], bool] | None = None
+) -> list[ProbeResult]:
     results = []
     for probe in probes:
+        if cancel is not None and cancel():
+            break
         try:
             results.append(probe())
         except Exception as e:
@@ -111,7 +118,11 @@ def probe_audio() -> ProbeResult:
     return ProbeResult("回环设备", "ok", f"{len(found)} 个设备，默认：{default}")
 
 
-def probe_game_audio(window: WindowRef | None = None) -> ProbeResult:
+def probe_game_audio(
+    window: WindowRef | None = None,
+    *,
+    on_source: Callable[[ThreadedSource], None] | None = None,
+) -> ProbeResult:
     from wowfish.audio._threaded import ThreadedSource
     from wowfish.audio.devices import open_capture
     from wowfish.config import load_config
@@ -127,7 +138,10 @@ def probe_game_audio(window: WindowRef | None = None) -> ProbeResult:
             title=window.title if window else cfg.game.window_title,
             fallback=cfg.audio.fallback_to_device,
         )
-        with ThreadedSource(source) as opened:
+        audio = ThreadedSource(source)
+        if on_source is not None:
+            on_source(audio)
+        with audio as opened:
             detail = opened.name
             fallback = opened.fallback_reason
             if fallback:
@@ -206,14 +220,18 @@ def probe_config() -> ProbeResult:
     )
 
 
-def default_probes(window: WindowRef | None = None) -> list[Probe]:
+def default_probes(
+    window: WindowRef | None = None,
+    *,
+    on_audio_source: Callable[[ThreadedSource], None] | None = None,
+) -> list[Probe]:
     return [
         probe_system,
         probe_display,
         probe_opencv,
         probe_audio,
         lambda: probe_game_window(window),
-        lambda: probe_game_audio(window),
+        lambda: probe_game_audio(window, on_source=on_audio_source),
         probe_input,
         lambda: probe_calibration(window),
         probe_config,

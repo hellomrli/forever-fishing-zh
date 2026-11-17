@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -120,6 +121,97 @@ def _windows_checks(app: Any) -> dict[str, Any]:
         "window_close": True,
         "process_audio": audio_probe,
     }
+
+
+def _audio_switch_checks(app: Any) -> dict[str, bool]:
+    """Keep native GUI controls responsive while a simulated driver releases its device."""
+
+    class Source:
+        sample_rate = 22050
+
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.entered = threading.Event()
+            self.stopped = threading.Event()
+            self.release = threading.Event()
+            self.closed = threading.Event()
+            self.owners: list[int] = []
+
+        def __enter__(self) -> Source:
+            self.owners.append(threading.get_ident())
+            self.entered.set()
+            return self
+
+        def read(self, _frames: int) -> np.ndarray:
+            self.stopped.wait(0.1)
+            return np.zeros(0, np.float32)
+
+        def cancel(self) -> None:
+            self.stopped.set()
+
+        def __exit__(self, *exc: object) -> None:
+            self.owners.append(threading.get_ident())
+            self.release.wait(10.0)
+            self.closed.set()
+
+    def pump_until(condition: Any) -> None:
+        deadline = time.monotonic() + 3.0
+        while not condition():
+            assert time.monotonic() < deadline, "音频切换未完成"
+            app.root.update()
+            app.tick()
+            time.sleep(0.01)
+
+    sources = [Source(f"界面自检设备 {i}") for i in range(1, 4)]
+    requested: list[str] = []
+    original = app.p._open_capture
+
+    def open_source(selector: str, **_kwargs: Any) -> Source:
+        requested.append(selector)
+        return sources[len(requested) - 1]
+
+    try:
+        app.p._open_capture = open_source
+        app.p.start_meter("first")
+        assert sources[0].entered.wait(1.0)
+        started = time.monotonic()
+        app.p.start_meter("second")
+        assert time.monotonic() - started < 0.2
+        app.tick()
+        assert app.p.working and not sources[1].entered.is_set()
+        assert "自动试听" in app.diagnostics.audio_note.cget("text")
+        assert str(app.fish.start.cget("state")) == "disabled"
+        assert str(app.fish.stop.cget("state")) == "normal"
+        assert str(app.diagnostics.cancel.cget("state")) == "normal"
+        app.notebook.select(0)
+        app.root.update()
+        assert _visible(app.fish.stop, app.root) and _visible(app.fish.graph.canvas, app.root)
+        sources[0].release.set()
+        pump_until(sources[1].entered.is_set)
+        assert sources[0].closed.is_set()
+
+        app.p.start_meter("third")
+        app.tick()
+        app.fish.stop.invoke()
+        sources[1].release.set()
+        pump_until(lambda: not app.p.working)
+        app.tick()
+        assert requested == ["first", "second"] and not sources[2].entered.is_set()
+        assert all(len(set(source.owners)) == 1 for source in sources[:2])
+        assert str(app.fish.start.cget("state")) == "normal"
+        assert "自动试听" not in app.diagnostics.audio_note.cget("text")
+        assert "任务已结束" in app.diagnostics.audio_note.cget("text")
+        return {
+            "audio_switch_nonblocking": True,
+            "audio_switch_resumed": True,
+            "pending_stop": True,
+        }
+    finally:
+        for source in sources:
+            source.release.set()
+        app.p.stop()
+        app.p.stop_meter(wait=True)
+        app.p._open_capture = original
 
 
 def run_smoke(report_path: Path) -> int:
@@ -244,6 +336,7 @@ def run_smoke(report_path: Path) -> int:
             picker._save()
             assert load_config()[0].vision.search_left == 0.1
             assert load_config()[0].vision.search_bottom == 0.8
+            report.update(_audio_switch_checks(app))
             app.fish.start.invoke()
             assert not app.p.running and "未找到" in app.p.error
             if sys.platform == "win32":

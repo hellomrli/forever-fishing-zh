@@ -45,6 +45,15 @@ class RecordingSource:
         if cancel is not None:
             cancel()
 
+    def is_alive(self) -> bool:
+        alive = getattr(self.inner, "is_alive", None)
+        return bool(alive is not None and alive())
+
+    def wait_closed(self, timeout: float = 2.0) -> None:
+        wait = getattr(self.inner, "wait_closed", None)
+        if wait is not None:
+            wait(timeout)
+
     def restart(self) -> None:
         self.inner.restart()
         self.name = getattr(self.inner, "name", self.name)
