@@ -1,0 +1,189 @@
+{
+  "date": "2026-11-17",
+  "version": "2.0.0-alpha.1",
+  "branch": "rust-rewrite",
+  "base_commit": "2d47bea6d16b69481cfdd8d4e5b537b375ac831f",
+  "source": "working tree",
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "python": "3.12.16"
+  },
+  "rust_tests": {
+    "debug": 30,
+    "release": 30,
+    "failed": 0
+  },
+  "python_tests": {
+    "passed": 89,
+    "failed": 0
+  },
+  "checks": {
+    "rustfmt": true,
+    "clippy_linux_all_targets_deny_warnings": true,
+    "clippy_windows_msvc_all_targets_deny_warnings": true,
+    "ruff_lint": true,
+    "ruff_format": true,
+    "python_release_metadata": true,
+    "linux_release_build": true,
+    "gui_default_home_isolation": true,
+    "cli_wav_analysis": true,
+    "cli_png_calibration_and_save": true,
+    "cli_relative_unicode_config_and_recovery": true
+  },
+  "gui": {
+    "ok": true,
+    "window": [
+      900,
+      640
+    ],
+    "font_scales": [
+      100,
+      125,
+      150
+    ],
+    "screenshots": 15,
+    "layouts": [
+      {
+        "font_scale": 100,
+        "page": "钓鱼",
+        "scroll_position": "top",
+        "visible_controls": {
+          "停止": true,
+          "开始钓鱼": true,
+          "暂停钓鱼": true
+        }
+      },
+      {
+        "font_scale": 100,
+        "page": "设置",
+        "scroll_position": "top",
+        "visible_controls": {}
+      },
+      {
+        "font_scale": 100,
+        "page": "设置",
+        "scroll_position": "bottom",
+        "visible_controls": {
+          "备份并恢复默认配置": true
+        }
+      },
+      {
+        "font_scale": 100,
+        "page": "校准与诊断",
+        "scroll_position": "top",
+        "visible_controls": {
+          "复制": true
+        }
+      },
+      {
+        "font_scale": 100,
+        "page": "校准与诊断",
+        "scroll_position": "bottom",
+        "visible_controls": {
+          "导出日志": true,
+          "环境诊断": true
+        }
+      },
+      {
+        "font_scale": 125,
+        "page": "钓鱼",
+        "scroll_position": "top",
+        "visible_controls": {
+          "停止": true,
+          "开始钓鱼": true,
+          "暂停钓鱼": true
+        }
+      },
+      {
+        "font_scale": 125,
+        "page": "设置",
+        "scroll_position": "top",
+        "visible_controls": {}
+      },
+      {
+        "font_scale": 125,
+        "page": "设置",
+        "scroll_position": "bottom",
+        "visible_controls": {
+          "备份并恢复默认配置": true
+        }
+      },
+      {
+        "font_scale": 125,
+        "page": "校准与诊断",
+        "scroll_position": "top",
+        "visible_controls": {
+          "复制": true
+        }
+      },
+      {
+        "font_scale": 125,
+        "page": "校准与诊断",
+        "scroll_position": "bottom",
+        "visible_controls": {
+          "导出日志": true,
+          "环境诊断": true
+        }
+      },
+      {
+        "font_scale": 150,
+        "page": "钓鱼",
+        "scroll_position": "top",
+        "visible_controls": {
+          "停止": true,
+          "开始钓鱼": true,
+          "暂停钓鱼": true
+        }
+      },
+      {
+        "font_scale": 150,
+        "page": "设置",
+        "scroll_position": "top",
+        "visible_controls": {}
+      },
+      {
+        "font_scale": 150,
+        "page": "设置",
+        "scroll_position": "bottom",
+        "visible_controls": {
+          "备份并恢复默认配置": true
+        }
+      },
+      {
+        "font_scale": 150,
+        "page": "校准与诊断",
+        "scroll_position": "top",
+        "visible_controls": {
+          "复制": true
+        }
+      },
+      {
+        "font_scale": 150,
+        "page": "校准与诊断",
+        "scroll_position": "bottom",
+        "visible_controls": {
+          "导出日志": true,
+          "环境诊断": true
+        }
+      }
+    ],
+    "embedded_audio_peak": 0.9999997615814209,
+    "embedded_vision_score": 1.0,
+    "report": "checks/rust-native/release/gui.json"
+  },
+  "font": {
+    "name": "Noto Sans SC Regular",
+    "weight": 400,
+    "bytes": 8331336,
+    "previous_variable_font_bytes": 17772300,
+    "sha256": "faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9",
+    "source": "crates/foreverfish/assets/FONT_SOURCE.md"
+  },
+  "not_run_locally": [
+    "Rust 1.88 minimum compiler checks (configured in CI)",
+    "Windows native linking, EXE smoke test and PowerShell packaging",
+    "Actual audio devices, reconnection and Forever client fishing"
+  ]
+}

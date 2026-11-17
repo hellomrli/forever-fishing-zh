@@ -7,6 +7,8 @@
 
 通过屏幕图像、声音和模拟按键工作；无需 GPU。Windows 发布包包含 Python 运行环境，下载后直接运行。
 
+当前 `rust-rewrite` 分支还提供 **Rust 原生预览版 2.0.0-alpha.1**，使用 egui 中文界面和原生 Windows 截图、按键及 WASAPI 音频接口。可执行程序内置中文字体、图标和音频素材，运行时无需 Python。构建与使用方法见 [Rust 使用说明](docs/Rust使用说明.md)；下方正式版下载链接仍对应 Python v1.0.1。
+
 ## 下载与使用
 
 - **[下载 Windows 中文界面 EXE](https://github.com/hellomrli/forever-fishing-zh/releases/latest/download/ForeverFishing.exe)**
@@ -72,6 +74,28 @@ uv run python -m wowfish.gui.launcher --smoke-test checks/gui.json
 配置使用 UTF-8 TOML，存放在系统用户配置目录的 `ForeverFishing` 文件夹中。“设置”页显示完整路径；也可执行 `foreverfish config --path`。设置环境变量 `FOREVERFISH_HOME` 可统一指定配置、缓存与日志目录；兼容旧的 `WOWFISH_HOME`。
 
 命令行还支持 `run`、`listen`、`watch`、`calibrate`、`verify-bite` 和 `doctor`，运行 `foreverfish --help` 查看中文帮助。
+
+## Rust 原生预览版
+
+Windows 预览包：[下载 GUI EXE](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.1/ForeverFishing-Rust.exe) · [下载便携 ZIP](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.1/ForeverFishing-Rust-v2.0.0-alpha.1-Windows-x64.zip) · [Rust 发布页](https://github.com/hellomrli/forever-fishing-zh/releases/tag/rust-v2.0.0-alpha.1)。发布文件由 Windows 原生构建、自检通过后生成。
+
+需要 Rust 1.88+。Windows 10 / 11 64 位支持游戏窗口、截图、按键、全局快捷键及音频捕获；Linux 支持开发、中文界面和离线图像 / WAV 分析。
+
+```bash
+cargo build --workspace --release --locked
+cargo run --locked --bin ForeverFishing-Rust
+cargo test --workspace --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+Windows 生成 `target/release/ForeverFishing-Rust.exe` 和 `ForeverFishing-Rust-CLI.exe`。执行 `./scripts/rust/package.ps1` 可生成便携 ZIP、许可证、构建信息和 SHA256 校验文件。Rust 版沿用现有 UTF-8 TOML 配置；也可用 `FOREVERFISH_HOME` 为预览版指定单独的数据目录。
+
+下图来自 Linux 上运行 Rust release 程序的真实界面自检，使用内置 Regular 中文字体：
+
+![Rust 原生中文界面](docs/images/rust-main.png)
+
+[Rust Native 工作流](.github/workflows/rust.yml)在 Linux / Windows 运行回归和数值对照测试，Windows 原生构建后执行生成 EXE 的界面自检，再生成预览包。自检覆盖 900×640 窗口、100% / 125% / 150% 字体缩放、设置与诊断页底部按钮。详见 [Rust 完善与验证记录](docs/Rust修复与验证.md)和 [2.0.0-alpha.1 发布说明](docs/releases/rust-v2.0.0-alpha.1.md)。
 
 ## 来源与许可
 

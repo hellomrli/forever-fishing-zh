@@ -11,4 +11,6 @@ dist/
 checks/
 .wowfish-home/
 .foreverfish-home/
+.foreverfish-rust-home/
 *.spec.bak
+/target/

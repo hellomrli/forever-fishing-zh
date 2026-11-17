@@ -1,0 +1,57 @@
+[package]
+name = "foreverfish-rust"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Forever 钓鱼助手：原生 Rust 中文桌面版"
+default-run = "ForeverFishing-Rust"
+build = "build.rs"
+
+[lib]
+name = "foreverfish"
+
+[[bin]]
+name = "ForeverFishing-Rust"
+path = "src/main.rs"
+
+[[bin]]
+name = "ForeverFishing-Rust-CLI"
+path = "src/console.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+ctrlc = "3.5"
+directories = "6.0"
+fs2 = "0.4"
+hound = "3.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+rand = "0.8"
+rustfft = "6.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.27"
+toml = "0.8"
+toml_edit = { version = "0.22", features = ["serde"] }
+
+[target.'cfg(windows)'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "wgpu"] }
+windows-core = "0.62.2"
+windows = { version = "0.62.2", features = [
+    "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Media_Audio",
+    "Win32_Media_KernelStreaming", "Win32_Media_Multimedia",
+    "Win32_System_Com", "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole", "Win32_System_Threading", "Win32_System_Variant",
+    "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging",
+    "Win32_Devices_FunctionDiscovery", "Win32_Security",
+] }
+
+[target.'cfg(not(windows))'.dependencies]
+eframe = { version = "0.31.1", default-features = false, features = ["default_fonts", "glow", "x11", "wayland"] }
+
+[build-dependencies]
+winresource = "0.1"

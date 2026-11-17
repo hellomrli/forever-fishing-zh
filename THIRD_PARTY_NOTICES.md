@@ -7,3 +7,7 @@
 主要运行依赖为 Python / Tcl-Tk、NumPy、OpenCV、soundcard、ttkbootstrap / Pillow、mss、Typer、Loguru、platformdirs、tomlkit、tomli-w 和 filelock，各依赖保留其原有许可证。
 
 Windows 单文件可执行程序通过 PyInstaller 构建。源码依赖和确切版本记录在 `pyproject.toml` 与 `uv.lock` 中；发行包同时携带本说明与 MIT 许可证。
+
+Rust 原生版本的图标和音频素材位于 `crates/foreverfish/assets/`，沿用相同的上游素材。主要依赖为 Rust 标准库、eframe / egui、windows-rs、image、rustfft、hound、clap、serde、toml / toml_edit、directories、fs2、rand、tempfile、anyhow 和 ctrlc；确切版本记录在 `Cargo.lock` 中。
+
+Rust 界面内置 **Noto Sans SC Regular** 中文字体，原版权为 Adobe，采用 SIL Open Font License 1.1。字体使用 [Noto CJK 上游](https://github.com/notofonts/noto-cjk)的静态 Regular 原文件；固定提交、下载地址与 SHA256 记录在 `crates/foreverfish/assets/FONT_SOURCE.md`，许可证全文位于同目录的 `OFL-NotoSansSC.txt`。Rust 便携包同时携带来源记录和字体许可证。

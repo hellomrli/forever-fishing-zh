@@ -1,0 +1,137 @@
+name: Rust Native
+
+on:
+  push:
+    branches: [rust-rewrite]
+    tags: ['rust-v*']
+  pull_request:
+    paths: ['Cargo.*', '.cargo/**', 'crates/**', 'scripts/rust/**', 'docs/Rust*.md', 'docs/releases/rust-*.md', 'README.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md', 'justfile', '.github/workflows/rust.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  msrv:
+    name: Minimum Rust 1.88 / Linux and Windows source
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+      - name: Check both platform backends on the minimum compiler
+        run: |
+          cargo check --workspace --all-targets --locked
+          cargo check --workspace --all-targets --target x86_64-pc-windows-msvc --locked
+
+  native:
+    name: Rust / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    env:
+      FOREVERFISH_HOME: ${{ github.workspace }}/checks/rust-home
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux desktop dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y libegl1-mesa-dev libgl1-mesa-dev libxkbcommon-dev libwayland-dev xvfb
+      - name: Formatting and lint
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Rust regression and parity tests
+        run: cargo test --workspace --release --locked
+      - name: Build standalone native executables
+        run: cargo build --workspace --release --locked
+      - name: Linux GUI self-test
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          mkdir -p checks
+          xvfb-run -a ./target/release/ForeverFishing-Rust --smoke-test checks/rust-linux-gui.json
+          ./target/release/ForeverFishing-Rust-CLI --version
+          ./target/release/ForeverFishing-Rust-CLI doctor
+      - name: Verify generated Windows EXE
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force checks | Out-Null
+          $report = Join-Path $env:GITHUB_WORKSPACE 'checks/rust-windows-exe.json'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'target/release/ForeverFishing-Rust.exe'
+          $stdout = Join-Path $env:GITHUB_WORKSPACE 'checks/rust-windows-exe.stdout.log'
+          $stderr = Join-Path $env:GITHUB_WORKSPACE 'checks/rust-windows-exe.stderr.log'
+          $process = Start-Process -FilePath $exe -ArgumentList "--smoke-test `"$report`"" -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+          try {
+            if (-not $process.WaitForExit(120000)) { $process | Stop-Process -Force; throw 'Rust GUI self-test timed out' }
+            if ($process.ExitCode -ne 0) { throw "Rust GUI self-test exited with $($process.ExitCode)" }
+          } finally {
+            if (Test-Path $stdout) { Get-Content $stdout -Raw -Encoding utf8 }
+            if (Test-Path $stderr) { Get-Content $stderr -Raw -Encoding utf8 }
+          }
+          $result = Get-Content $report -Raw -Encoding utf8 | ConvertFrom-Json
+          if (-not $result.ok -or -not $result.native_rust -or -not $result.checks.platform.hotkeys) { throw 'Rust native verification failed' }
+          Get-Content $report -Raw -Encoding utf8
+          & ./target/release/ForeverFishing-Rust-CLI.exe --version
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & ./target/release/ForeverFishing-Rust-CLI.exe doctor
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Package Windows preview
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/rust/package.ps1
+      - name: Upload native Windows package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ForeverFishing-Rust-Windows-x64
+          path: dist/rust/
+          if-no-files-found: error
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: rust-verification-${{ runner.os }}
+          path: checks/
+          if-no-files-found: warn
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/rust-v')
+    needs: [native, msrv]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: ForeverFishing-Rust-Windows-x64
+          path: dist/rust
+      - name: Verify checksums and release metadata
+        run: |
+          cd dist/rust
+          sha256sum --check SHA256SUMS.txt
+          expected="${GITHUB_REF_NAME#rust-v}"
+          test "$(head -n 1 BUILD_INFO.txt)" = "version=$expected"
+      - name: Publish Rust preview
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/rust/*.exe dist/rust/*.zip dist/rust/SHA256SUMS.txt dist/rust/BUILD_INFO.txt \
+            --verify-tag --prerelease --latest=false --title "Forever 钓鱼助手 Rust ${GITHUB_REF_NAME#rust-}" \
+            --notes-file "docs/releases/${GITHUB_REF_NAME}.md"

@@ -30,3 +30,32 @@ Windows 自检还会创建一个中文测试窗口，检查原生枚举、移动
 界面只在 Tk 主线程更新；COM 音频设备必须在自己的读取线程打开和释放。保存配置请使用 `update_config` 读取最新状态并修改目标字段，避免写入过期的整个配置快照。
 
 发布时更新 `pyproject.toml`、`uv.lock`、`src/wowfish/__init__.py` 的备用版本、`packaging/windows_version.txt`、`packaging/windows.manifest` 及 `docs/releases/vX.Y.Z.md` 说明。`scripts/check_release.py` 检查版本一致性、素材和发布说明。待 CI 通过后创建对应 `vX.Y.Z` 标签；Release Windows 工作流会原生构建、自检、生成校验值并发布到 GitHub Releases。
+
+## Rust 原生版本
+
+`rust-rewrite` 分支的 Rust 工作区位于 `crates/foreverfish`。需要 Rust 1.88+，桌面界面使用 eframe / egui；Windows 截图、输入与 WASAPI 音频接口在 `src/platform` 中实现。Linux 可验证通用算法、配置、任务管理、界面和离线命令。
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace --locked
+cargo build --workspace --release --locked
+```
+
+Linux 界面自检与 Windows 后端编译检查：
+
+```bash
+LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a ./target/release/ForeverFishing-Rust --smoke-test checks/rust-gui.json
+rustup target add x86_64-pc-windows-msvc
+cargo check --workspace --all-targets --target x86_64-pc-windows-msvc --locked
+```
+
+交叉编译检查验证 Windows 源码的类型，不替代 Windows 原生链接、生成 EXE 和接口自检。Windows 使用 `scripts/rust/package.ps1` 打包，完整流程由 `.github/workflows/rust.yml` 执行。
+
+游戏状态机 `engine.rs` 不直接读取设备或发送按键；等待使用单调时钟的截止时间，保持暂停和停止可响应。界面只在 egui 主线程处理事件。音频打开、读取和释放必须由同一工作线程完成；切换任务必须等旧线程及其音频资源完全退出。取消的任务只报告清理完成，不再提交校准、录音或设备结果。
+
+配置使用 `Store::update` 在文件锁内读取最新内容，只修改目标字段；保留中文、注释、未知字段和未修改值的原始格式。不要直接将界面中的整个配置快照覆盖到磁盘。
+
+音频数值测试读取 `crates/foreverfish/tests/fixtures/python_audio.json` 中的 Python 参考数据。修改共同算法时，在确认 Python 行为正确后运行 `uv run python scripts/rust/generate_audio_parity.py` 更新，并检查参考值变化。Rust 测试与运行不依赖 Python。
+
+Rust 发布版本定义在根 `Cargo.toml` 的 `workspace.package.version` 中，还需更新 `Cargo.lock`、`crates/foreverfish/windows.manifest` 的数字版本，以及 `docs/releases/rust-vX.Y.Z.md`。预览标签为 `rust-vX.Y.Z`，与 Python 的 `vX.Y.Z` 标签分别使用各自的发布流程。

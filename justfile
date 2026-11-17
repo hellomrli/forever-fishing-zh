@@ -23,3 +23,19 @@ build:
 # Native Windows builds also exercise screen capture, minimize/restore and global hotkeys.
 smoke:
     uv run python -m wowfish.gui.launcher --smoke-test checks/gui.json
+
+rust-lint:
+    cargo fmt --all -- --check
+    cargo clippy --workspace --all-targets --locked -- -D warnings
+
+rust-test:
+    cargo test --workspace --locked
+
+rust-build:
+    cargo build --workspace --release --locked
+
+rust-gui:
+    cargo run --locked --bin ForeverFishing-Rust
+
+rust-smoke:
+    cargo run --locked --bin ForeverFishing-Rust -- --smoke-test checks/rust-gui.json
