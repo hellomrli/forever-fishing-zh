@@ -25,6 +25,8 @@ jobs:
         with:
           targets: x86_64-pc-windows-msvc
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Check both platform backends on the minimum compiler
         run: |
           cargo check --workspace --all-targets --locked
@@ -45,6 +47,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
       - name: Install Linux desktop dependencies
         if: runner.os == 'Linux'
         run: |

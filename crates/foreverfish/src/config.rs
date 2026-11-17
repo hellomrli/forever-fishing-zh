@@ -285,7 +285,10 @@ impl Store {
         loop {
             match file.try_lock_exclusive() {
                 Ok(()) => return Ok(file),
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                // Windows lock contention uses ERROR_LOCK_VIOLATION rather than WouldBlock.
+                Err(error)
+                    if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+                {
                     if Instant::now() >= deadline {
                         bail!("配置文件被其他任务占用，请稍后重试");
                     }

@@ -376,12 +376,8 @@ pub fn native_smoke() -> Result<serde_json::Value> {
             !refresh(&original)?.context("恢复后身份丢失")?.minimized,
             "窗口恢复失败"
         );
-        let game = config::Game {
-            pause_hotkey: "f11".into(),
-            stop_hotkey: "f12".into(),
-            ..Default::default()
-        };
-        let hotkeys = Hotkeys::new(&game)?;
+        // Verify the shipped F8/F9 defaults without sending real keystrokes.
+        let hotkeys = Hotkeys::new(&config::Game::default())?;
         PostThreadMessageW(hotkeys.thread_id, WM_HOTKEY, WPARAM(1), LPARAM(0))?;
         PostThreadMessageW(hotkeys.thread_id, WM_HOTKEY, WPARAM(2), LPARAM(0))?;
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
