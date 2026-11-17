@@ -171,7 +171,9 @@ pub fn capture(window: &Window, region: Region) -> Result<Frame> {
             "截图读取失败"
         );
         let rgb: Vec<_> = pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .flat_map(|p| [p[2], p[1], p[0]])
             .collect();
         Frame::from_raw(w, h, rgb).context("截图尺寸不匹配")
