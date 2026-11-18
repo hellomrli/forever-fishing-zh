@@ -49,6 +49,9 @@ RESWEEP_AFTER_TIMEOUTS = 2  # icon timeouts in a row before the next cast measur
 JUMP_LANDING_S = (1.0, 1.5)  # Fishing cannot be cast mid-air; wait this long after a jump
 QUIT_WAIT_S = 30.0  # away from an inn, /quit counts down 20 s before the game closes
 QUIT_TRIES = 3  # quit key presses before giving up on closing the game
+# Casts in a row that heard a splash, held it back on the picture alone and never reeled in.
+# After this many the picture check has cost more fish than it can save: reel in on sound.
+VISUAL_MISSES_BEFORE_BYPASS = 2
 BUSY = (State.CASTING, State.WAIT_BITE, State.INTERACT)  # a cast in hand
 
 
@@ -133,6 +136,8 @@ class FishingEngine:
         self.verifier = bite_verifier or (
             VisualBiteVerifier(cfg.vision.motion_threshold) if cfg.vision.confirm_bite else None
         )
+        self._bite_rejected = False  # this cast heard a splash the picture did not confirm
+        self._visual_misses = 0  # such casts in a row that ended without reeling in
         self._audio_retries = 0
         self._audio_stable_since: float | None = None
         self._last_acquire = -math.inf
@@ -330,6 +335,7 @@ class FishingEngine:
         self._misses = 0
         self._disappeared_since = None
         self._candidate = None
+        self._bite_rejected = False
         if self.verifier is not None:
             self.verifier.reset()
         self._last_visual = -math.inf
@@ -359,22 +365,42 @@ class FishingEngine:
             if self.verifier is not None and not self.verifier.confirmed(now):
                 if now >= deadline:
                     self._candidate = None
-                    self._emit(ev.BiteRejected(self._t(), float(bite.score)))
+                    self._bite_rejected = True
+                    strongest = getattr(self.verifier, "strongest", None)
+                    change, needed = (strongest(now) if strongest else None) or (0.0, 0.0)
+                    self._emit(
+                        ev.BiteRejected(self._t(), float(bite.score), float(change), float(needed))
+                    )
                 # Keep checking icon loss and the cast timeout while awaiting confirmation.
             else:
                 self._candidate = None
+                if self.verifier is not None:
+                    self._visual_misses = 0  # the picture check passed a bite: it works here
                 self._interact_bite(bite)
                 return
         seen = self._track(now)
         if seen is False and self._misses >= self.lost_after:
             self._emit(ev.IconLost(self._t()))
+            self._note_visual_miss()
             self._miss(msg("lost_icon"))
             return
         if now - self._t_cast > self.cfg.run.cast_timeout_s:
             clip, score = self._best_heard
             detail = f"最高得分 {score:.2f}（{clip}）" if clip else "没有声音匹配"
             self._emit(ev.Timeout(self._t(), "bite", self.cfg.run.cast_timeout_s, detail))
+            self._note_visual_miss()
             self._miss(msg("no_bite"))
+
+    def _note_visual_miss(self) -> None:
+        """The cast ended without reeling in. If the picture check held back a splash on it,
+        count that, and stop letting the check veto once it has done so several casts running:
+        a bobber that goes unanswered every cast is worse than answering a neighbour's splash."""
+        if self.verifier is None or not self._bite_rejected:
+            return
+        self._visual_misses += 1
+        if self._visual_misses >= VISUAL_MISSES_BEFORE_BYPASS:
+            self.verifier = None
+            self._emit(ev.Error(self._t(), msg("visual_off", casts=self._visual_misses)))
 
     def _interact_bite(self, bite: Any) -> None:
         if self.behavior.skip_bite():

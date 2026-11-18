@@ -54,8 +54,9 @@ def describe(event: ev.Event) -> str:
             return msg("lost_icon")
         case ev.BiteHeard(clip=clip, score=score):
             return f"识别到{clip_label(clip)}，得分 {score:.2f}"
-        case ev.BiteRejected(score=score):
-            return f"水花得分 {score:.2f}，自己的浮漂没有明显变化，继续等待"
+        case ev.BiteRejected(score=score, change=change, needed=needed):
+            seen = f"画面变化 {change:.1f}，需要 {needed:.1f}" if needed else "尚无画面样本"
+            return f"水花得分 {score:.2f}，自己的浮漂没有明显变化（{seen}），继续等待"
         case ev.AudioOpened(name=name, fallback=fallback):
             return f"音频来源：{name}" + (f"；{fallback}" if fallback else "")
         case ev.KeyPressed(key=key, why=why):

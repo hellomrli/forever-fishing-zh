@@ -49,7 +49,13 @@ from wowfish.engine import events as ev
 from wowfish.engine.engine import FishingEngine
 from wowfish.engine.state import State
 from wowfish.gui.hotkeys import HOTKEY_PAUSE, HOTKEY_STOP, MOD_NOREPEAT, HotkeyManager
-from wowfish.gui.presenter import CalibrateDone, Presenter, VerifyDone, WorkerFailed
+from wowfish.gui.presenter import (
+    CalibrateDone,
+    Presenter,
+    VerifyDone,
+    WorkerFailed,
+    describe,
+)
 from wowfish.vision.bite import VisualBiteVerifier
 from wowfish.vision.calibrate import Calibration, calibrate_icon_scale
 from wowfish.vision.imageio import read_image, write_image
@@ -1049,14 +1055,83 @@ def test_visual_sampling_ignores_changes_outside_own_bobber_crop():
     verifier = VisualBiteVerifier(8)
     e = engine(io, bite_verifier=verifier)
     e._icon_xy, e._icon_size = (80, 40), 18
-    e._observe_bobber(0)
+    for step in range(7):  # still water first: changes are judged against what came before
+        e._observe_bobber(step * 0.2)
     io.frame[20:50, 150:180] = 200
-    e._observe_bobber(0.2)
-    assert not verifier.confirmed(0.2)
+    e._observe_bobber(1.4)
+    assert not verifier.confirmed(1.4)
     io.frame[50:80, 60:90] = 200
-    e._observe_bobber(0.4)
-    assert verifier.confirmed(0.4)
-    assert not verifier.confirmed(2.1)
+    e._observe_bobber(1.6)
+    assert verifier.confirmed(1.6)
+    assert not verifier.confirmed(3.3)
+
+
+def test_visual_confirmation_sees_a_splash_smaller_than_the_icon():
+    rng = np.random.default_rng(3)
+    verifier = VisualBiteVerifier(8)
+
+    def water():  # the 4 x 5 icon-side crop the engine watches, for a 42 px icon
+        return np.clip(rng.normal(90, 4, (210, 168, 3)), 0, 255).astype(np.uint8)
+
+    now = 0.0
+    for _ in range(30):
+        verifier.observe(water(), now)
+        now += 0.1
+        assert not verifier.confirmed(now)  # shimmering water alone never confirms
+    splash = water()
+    splash[100:126, 70:96] = 230  # 26 x 26 px: under 2% of the crop, 40% of the icon's area
+    verifier.observe(splash, now)
+    assert verifier.confirmed(now)
+    change, needed = verifier.strongest(now)
+    assert change >= needed >= 8
+
+
+def _lose_a_heard_bite(e, io):
+    """One cast: the splash is heard, the picture does not confirm it, the bobber goes away."""
+    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
+    e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
+    io.t += 0.7
+    e._wait_bite(io.t, [])
+    io.score = 0.0
+    for _ in range(3):
+        io.t += 0.3
+        e._wait_bite(io.t, [])
+    io.score = 0.9
+    assert e.state is State.IDLE and io.pressed == []
+
+
+def test_picture_check_stops_vetoing_after_two_casts_lost_to_it():
+    io = FakeIO()
+    e = engine(io, bite_verifier=SimpleNamespace(confirmed=lambda _: False, reset=lambda: None))
+    _lose_a_heard_bite(e, io)
+    assert e.verifier is not None
+    _lose_a_heard_bite(e, io)
+    assert e.verifier is None
+    notices = [item.message for item in e.events.queue if isinstance(item, ev.Error)]
+    assert len(notices) == 1 and "画面确认" in notices[0]
+    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
+    e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
+    assert io.pressed == ["f"] and e.state is State.INTERACT
+
+
+def test_a_confirmed_bite_keeps_the_picture_check_and_rejections_report_what_was_seen():
+    io = FakeIO()
+    verifier = SimpleNamespace(
+        confirmed=lambda _: False, reset=lambda: None, strongest=lambda _: (3.5, 8.0)
+    )
+    e = engine(io, bite_verifier=verifier)
+    _lose_a_heard_bite(e, io)
+    rejected = next(item for item in e.events.queue if isinstance(item, ev.BiteRejected))
+    assert (rejected.change, rejected.needed) == (3.5, 8.0)
+    assert "画面变化 3.5，需要 8.0" in describe(rejected)
+    verifier.confirmed = lambda _: True
+    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
+    e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
+    assert io.pressed == ["f"]
+    io.pressed.clear()
+    verifier.confirmed = lambda _: False
+    _lose_a_heard_bite(e, io)
+    assert e.verifier is verifier  # one loss since the last confirmed bite, not two in a row
 
 
 @pytest.mark.parametrize("size", [12, 14, 16, 18])

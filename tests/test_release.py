@@ -23,7 +23,7 @@ def metadata(tmp_path):
         "src/wowfish/__init__.py",
         "packaging/windows_version.txt",
         "packaging/windows.manifest",
-        "docs/releases/v1.0.1.md",
+        "docs/releases/v1.0.2.md",
     ):
         destination = tmp_path / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -34,12 +34,12 @@ def metadata(tmp_path):
 @pytest.mark.parametrize(
     ("path", "old", "new"),
     [
-        ("pyproject.toml", 'version = "1.0.1"', 'version = "1.0.0"'),
-        ("uv.lock", 'version = "1.0.1"', 'version = "1.0.0"'),
-        ("src/wowfish/__init__.py", '"1.0.1"', '"1.0.0"'),
-        ("packaging/windows_version.txt", "'FileVersion', '1.0.1'", "'FileVersion', '1.0.0'"),
-        ("packaging/windows_version.txt", "filevers=(1, 0, 1, 0)", "filevers=(1, 0, 0, 0)"),
-        ("packaging/windows.manifest", 'version="1.0.1.0"', 'version="1.0.0.0"'),
+        ("pyproject.toml", 'version = "1.0.2"', 'version = "1.0.0"'),
+        ("uv.lock", 'version = "1.0.2"', 'version = "1.0.0"'),
+        ("src/wowfish/__init__.py", '"1.0.2"', '"1.0.0"'),
+        ("packaging/windows_version.txt", "'FileVersion', '1.0.2'", "'FileVersion', '1.0.0'"),
+        ("packaging/windows_version.txt", "filevers=(1, 0, 2, 0)", "filevers=(1, 0, 0, 0)"),
+        ("packaging/windows.manifest", 'version="1.0.2.0"', 'version="1.0.0.0"'),
     ],
 )
 def test_rejects_stale_metadata(metadata, path, old, new):
@@ -48,10 +48,10 @@ def test_rejects_stale_metadata(metadata, path, old, new):
     assert old in text
     target.write_text(text.replace(old, new), encoding="utf-8")
     with pytest.raises(SystemExit, match="metadata mismatch"):
-        release.check_versions(metadata, "1.0.1")
+        release.check_versions(metadata, "1.0.2")
 
 
 def test_rejects_missing_notes(metadata):
-    (metadata / "docs/releases/v1.0.1.md").unlink()
+    (metadata / "docs/releases/v1.0.2.md").unlink()
     with pytest.raises(SystemExit, match="Missing release notes"):
-        release.check_versions(metadata, "1.0.1")
+        release.check_versions(metadata, "1.0.2")

@@ -7,7 +7,7 @@
 
 通过屏幕图像、声音和模拟按键工作；无需 GPU。Windows 发布包包含 Python 运行环境，下载后直接运行。
 
-当前 `rust-rewrite` 分支还提供 **Rust 原生预览版 2.0.0-alpha.1**，使用 egui 中文界面和原生 Windows 截图、按键及 WASAPI 音频接口。可执行程序内置中文字体、图标和音频素材，运行时无需 Python。构建与使用方法见 [Rust 使用说明](docs/Rust使用说明.md)；下方正式版下载链接仍对应 Python v1.0.1。
+当前 `rust-rewrite` 分支还提供 **Rust 原生预览版 2.0.0-alpha.1**，使用 egui 中文界面和原生 Windows 截图、按键及 WASAPI 音频接口。可执行程序内置中文字体、图标和音频素材，运行时无需 Python。构建与使用方法见 [Rust 使用说明](docs/Rust使用说明.md)；下方正式版下载链接仍对应 Python v1.0.2。
 
 ## 下载与使用
 
