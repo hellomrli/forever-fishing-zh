@@ -248,6 +248,9 @@ impl Drop for Manager {
 
 type Emit<'a> = &'a (dyn Fn(Event) + Sync);
 
+/// Unread audio kept while the worker is busy (4 s, as in the Python reader thread).
+const MAX_QUEUED_SAMPLES: usize = audio::RATE as usize * 4;
+
 struct Stream {
     packets: Arc<Mutex<VecDeque<Vec<f32>>>>,
     failure: Arc<Mutex<Option<String>>>,
@@ -305,10 +308,14 @@ impl Stream {
                             retries = 0;
                         }
                         let mut queue = out.lock().unwrap();
-                        if queue.len() >= 8 {
-                            queue.pop_front();
-                        }
                         queue.push_back(samples);
+                        // Bound by duration, not packet count: packets are about 10 ms, and one
+                        // lost packet inside the 0.8 s fingerprint window sinks a real splash
+                        // below the threshold. A slow screenshot must never drop audio.
+                        let mut held: usize = queue.iter().map(Vec::len).sum();
+                        while held > MAX_QUEUED_SAMPLES && queue.len() > 1 {
+                            held -= queue.pop_front().map_or(0, |packet| packet.len());
+                        }
                     }
                     Ok(_) => {
                         stop.wait(Duration::from_millis(5));
@@ -617,6 +624,8 @@ fn fish(
     let mut last_vision = f64::NEG_INFINITY;
     let mut last_snapshot = f64::NEG_INFINITY;
     let mut last_sweep = f64::NEG_INFINITY;
+    // Best clip score since the icon was found, reported when a wait ends without a reel-in.
+    let mut heard: Option<(usize, f32)> = None;
     while engine.state != State::Stopped && !cancel.is_cancelled() {
         for (_, event) in receiver.try_iter() {
             if matches!(event, Event::Source { .. }) {
@@ -643,6 +652,13 @@ fn fish(
             if engine.state == State::Waiting && !engine.manual_paused && observed.focused {
                 let result = detector.feed(&samples, cancel)?;
                 observed.bite = result.bites.first().cloned().or(observed.bite);
+                for frame in &result.frames {
+                    for (clip, &score) in frame.scores.iter().enumerate() {
+                        if score > heard.map_or(-1.0, |best| best.1) {
+                            heard = Some((clip, score));
+                        }
+                    }
+                }
                 send_scores(&result, emit);
             }
         }
@@ -718,6 +734,7 @@ fn fish(
             }
         }
         observed.visual_confirmed = motion.confirmed(start.elapsed().as_secs_f64());
+        observed.motion = motion.strongest(start.elapsed().as_secs_f64());
         // Recheck focus and manual pause after a potentially expensive calibration pass.
         observed.focused &= platform::focused(&window);
         engine.manual_paused = paused.load(Ordering::Acquire);
@@ -738,6 +755,20 @@ fn fish(
                     emit(Event::Message(message))
                 }
             }
+        }
+        if previous == State::Casting && engine.state == State::Waiting {
+            heard = None;
+        }
+        if previous == State::Waiting && engine.state == State::Resting {
+            // Tells a missed splash apart from a rejected one or a lost icon.
+            emit(Event::Message(match heard {
+                Some((clip, score)) => format!(
+                    "本次等待未收杆：水花最高得分 {score:.2}（{}），阈值 {:.2}",
+                    crate::assets::CLIPS[clip].0,
+                    engine.cfg.audio.bite_threshold
+                ),
+                None => "本次等待未收杆：没有声音达到可比对的音量，请检查音频来源".into(),
+            }));
         }
         let now = start.elapsed().as_secs_f64();
         if engine.state != previous || now - last_snapshot >= 0.2 {

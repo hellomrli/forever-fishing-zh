@@ -186,11 +186,14 @@ pub fn press(window: &Window, key: &str, hold_ms: u32, cancel: &Cancel) -> Resul
     }
     let code = config::key_code(key).context("不支持的按键")?;
     unsafe {
+        // Games may read the hardware scan code rather than the virtual key; send both.
+        let scan = MapVirtualKeyW(code as u32, MAPVK_VK_TO_VSC) as u16;
         let down = INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
                     wVk: VIRTUAL_KEY(code),
+                    wScan: scan,
                     ..Default::default()
                 },
             },
@@ -206,6 +209,7 @@ pub fn press(window: &Window, key: &str, hold_ms: u32, cancel: &Cancel) -> Resul
             Anonymous: INPUT_0 {
                 ki: KEYBDINPUT {
                     wVk: VIRTUAL_KEY(code),
+                    wScan: scan,
                     dwFlags: KEYEVENTF_KEYUP,
                     ..Default::default()
                 },

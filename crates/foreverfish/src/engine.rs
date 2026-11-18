@@ -66,7 +66,13 @@ pub struct Observation {
     pub icon: Option<IconMatch>,
     pub bite: Option<Bite>,
     pub visual_confirmed: bool,
+    /// Strongest recent change near the bobber and the bar it had to reach.
+    pub motion: Option<(f32, f32)>,
 }
+
+/// The icon counts as lost only after this long without a match: the splash is recognised
+/// about 0.9 s after it starts, so a brief flicker must not recast first (Python: 0.75 s).
+const ICON_LOST_S: f64 = 0.75;
 
 impl Default for Observation {
     fn default() -> Self {
@@ -77,6 +83,7 @@ impl Default for Observation {
             icon: None,
             bite: None,
             visual_confirmed: false,
+            motion: None,
         }
     }
 }
@@ -306,7 +313,12 @@ impl Engine {
                         }
                     } else if now >= *until {
                         self.candidate = None;
-                        actions.push(Action::Message("水花缺少局部画面变化，继续等待".into()));
+                        actions.push(Action::Message(match observed.motion {
+                            Some((change, bar)) => format!(
+                                "水花缺少局部画面变化（最大 {change:.1}，需要 {bar:.1}），继续等待"
+                            ),
+                            None => "水花缺少局部画面变化（尚无画面样本），继续等待".into(),
+                        }));
                     }
                 }
                 if self.state == State::Waiting {
@@ -314,11 +326,15 @@ impl Engine {
                         if icon.accepted(self.cfg.vision.icon_threshold) {
                             self.icon = Some(icon);
                             self.misses = 0;
+                            self.disappeared = None;
                         } else {
                             self.misses += 1;
+                            self.disappeared.get_or_insert(now);
                         }
                     }
-                    if self.misses >= 3 {
+                    if self.misses >= 3
+                        && self.disappeared.is_some_and(|at| now - at >= ICON_LOST_S)
+                    {
                         self.miss(now, "浮漂图标连续丢失，重新抛竿", &mut actions);
                     } else if now - self.cast_at > self.cfg.run.cast_timeout_s {
                         self.miss(now, "等待咬钩超时", &mut actions);
@@ -516,6 +532,67 @@ mod tests {
         assert_eq!(engine.stats.catches, 1);
         assert_eq!(engine.stats.casts, 1);
         assert_eq!(engine.stats.bites, 1);
+    }
+    #[test]
+    fn brief_icon_flicker_while_waiting_does_not_recast_before_the_bite() {
+        let mut cfg = Config::default();
+        cfg.vision.confirm_bite = false;
+        let mut engine = Engine::with_seed(cfg, 7);
+        engine.tick(0.0, Observation::default());
+        engine.tick(
+            0.2,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        // The splash hides the icon for half a second; the bite is heard after that.
+        for now in [5.0, 5.1, 5.2, 5.3, 5.4, 5.5] {
+            engine.tick(
+                now,
+                Observation {
+                    icon: Some(IconMatch::none(29)),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(engine.state, State::Waiting);
+        engine.tick(
+            5.6,
+            Observation {
+                bite: Some(Bite {
+                    clip: "own".into(),
+                    score: 0.9,
+                    onset_s: 0.0,
+                }),
+                ..Default::default()
+            },
+        );
+        assert_eq!(engine.state, State::Reacting);
+        assert_eq!(engine.stats.misses, 0);
+    }
+    #[test]
+    fn icon_missing_for_long_while_waiting_recasts() {
+        let mut engine = Engine::with_seed(Config::default(), 7);
+        engine.tick(0.0, Observation::default());
+        engine.tick(
+            0.2,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        for step in 0..9 {
+            engine.tick(
+                5.0 + step as f64 * 0.1,
+                Observation {
+                    icon: Some(IconMatch::none(29)),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(engine.state, State::Resting);
+        assert_eq!(engine.stats.misses, 1);
     }
     #[test]
     fn interrupted_lure_is_reapplied_and_long_wait_can_stop() {

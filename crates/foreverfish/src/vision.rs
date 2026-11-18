@@ -462,6 +462,14 @@ impl Motion {
         }
         change
     }
+    /// Strongest recent change and the bar it had to reach, for the rejection message.
+    pub fn strongest(&self, now: f64) -> Option<(f32, f32)> {
+        self.changes
+            .iter()
+            .filter(|(t, _, _)| now >= *t && now - t <= 1.5)
+            .map(|&(_, value, bar)| (value, bar))
+            .max_by(|a, b| (a.0 / a.1).total_cmp(&(b.0 / b.1)))
+    }
     pub fn confirmed(&self, now: f64) -> bool {
         self.changes
             .iter()
