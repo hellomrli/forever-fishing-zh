@@ -463,6 +463,7 @@ impl App {
                     egui::StrokeKind::Inside,
                 );
             }
+            ui.small("找到浮漂后，请保持游戏镜头和缩放不变。");
         }
         self.score_graph(ui);
         ui.small("收杆计数依据图标连续消失，表示估计值。实际客户端效果可通过校准和录音验证调整。");

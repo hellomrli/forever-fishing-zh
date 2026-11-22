@@ -1,0 +1,37 @@
+name: Upstream Review
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main, rust-rewrite]
+    paths: ['.github/upstream.json', '.github/workflows/upstream.yml', 'scripts/check_upstream.py']
+  pull_request:
+    paths: ['.github/upstream.json', '.github/workflows/upstream.yml', 'scripts/check_upstream.py']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: Compare the reviewed upstream commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Generate the upstream review report
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_upstream.py --fail-on-changes
+      - name: Upload the comparison report
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: upstream-review
+          path: checks/upstream/
+          if-no-files-found: warn

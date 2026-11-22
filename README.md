@@ -7,7 +7,7 @@
 
 通过屏幕图像、声音和模拟按键工作；无需 GPU。Windows 发布包包含 Python 运行环境，下载后直接运行。
 
-当前 `rust-rewrite` 分支还提供 **Rust 原生预览版 2.0.0-alpha.1**，使用 egui 中文界面和原生 Windows 截图、按键及 WASAPI 音频接口。可执行程序内置中文字体、图标和音频素材，运行时无需 Python。构建与使用方法见 [Rust 使用说明](docs/Rust使用说明.md)；下方正式版下载链接仍对应 Python v1.0.2。
+项目还提供 **Rust 原生预览版 2.0.0-alpha.2**，使用 egui 中文界面和原生 Windows 截图、按键及 WASAPI 音频接口。可执行程序内置中文字体、图标和音频素材，运行时无需 Python。构建与使用方法见 [Rust 使用说明](docs/Rust使用说明.md)；下方正式版下载链接对应 Python v1.0.3。
 
 ## 下载与使用
 
@@ -22,6 +22,8 @@
 3. 执行 `/console SoftTargetIconGameObject 1`，让浮漂显示金色齿轮。
 4. 在“设置”页保存对应按键；在“校准与诊断”页试听并确认声音来源。
 5. 点击“开始钓鱼”后切回游戏。默认 **F8 暂停 / 继续，F9 停止**；切出游戏也会自动暂停。
+
+找到浮漂后，请保持游戏镜头和缩放不变。v1.0.3 会在实际抛竿后等待 1.5 秒再识别，并核对候选图标是否在抛竿前已经存在，减少附近既有浮漂的干扰。详见 [v1.0.3 发布说明](docs/releases/v1.0.3.md)。
 
 工具依赖客户端提供交互图标、对应互动键和自动拾取功能。第一次抛竿会自动测量图标；识别不稳定时，可手动校准或框选自己的水面区域。收杆确认是图标连续消失后的**估计计数**，不代表已核实鱼进入背包。
 
@@ -45,6 +47,7 @@ v1.0.1 进一步完善了暂停、音频任务切换和录音分析：补饵被�
 
 - [上游项目评审](docs/上游项目评审.md)：改版前的问题与证据。
 - [修复与验证记录](docs/修复与验证.md)：R01–R10 的对应改动、回归覆盖和验证边界。
+- [持续优化记录](docs/持续优化.md)：对照上游 v1.3.0 后的识别与音频改进、Rust / Python 行为对齐，以及每日上游变更检查。
 - CI 在 Linux 与 Windows 运行离线回归测试，并打开真实 Tk 界面测试 100%、125%、150% 字体缩放。
 - Windows 构建后会运行**生成的 EXE**，检查中文页面、配置、图片路径、全局快捷键、原生窗口移动 / 缩放 / 最小化恢复及截图。
 
@@ -77,7 +80,7 @@ uv run python -m wowfish.gui.launcher --smoke-test checks/gui.json
 
 ## Rust 原生预览版
 
-Windows 预览包：[下载 GUI EXE](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.1/ForeverFishing-Rust.exe) · [下载便携 ZIP](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.1/ForeverFishing-Rust-v2.0.0-alpha.1-Windows-x64.zip) · [Rust 发布页](https://github.com/hellomrli/forever-fishing-zh/releases/tag/rust-v2.0.0-alpha.1)。发布文件由 Windows 原生构建、自检通过后生成。
+Windows 预览包：[下载 GUI EXE](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.2/ForeverFishing-Rust.exe) · [下载便携 ZIP](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.2/ForeverFishing-Rust-v2.0.0-alpha.2-Windows-x64.zip) · [Rust 发布页](https://github.com/hellomrli/forever-fishing-zh/releases/tag/rust-v2.0.0-alpha.2)。发布文件由 Windows 原生构建、自检通过后生成。
 
 需要 Rust 1.88+。Windows 10 / 11 64 位支持游戏窗口、截图、按键、全局快捷键及音频捕获；Linux 支持开发、中文界面和离线图像 / WAV 分析。
 
@@ -95,7 +98,7 @@ Windows 生成 `target/release/ForeverFishing-Rust.exe` 和 `ForeverFishing-Rust
 
 ![Rust 原生中文界面](docs/images/rust-main.png)
 
-[Rust Native 工作流](.github/workflows/rust.yml)在 Linux / Windows 运行回归和数值对照测试，Windows 原生构建后执行生成 EXE 的界面自检，再生成预览包。自检覆盖 900×640 窗口、100% / 125% / 150% 字体缩放、设置与诊断页底部按钮。详见 [Rust 完善与验证记录](docs/Rust修复与验证.md)和 [2.0.0-alpha.1 发布说明](docs/releases/rust-v2.0.0-alpha.1.md)。
+[Rust Native 工作流](.github/workflows/rust.yml)在 Linux / Windows 运行回归和数值对照测试，Windows 原生构建后执行生成 EXE 的界面自检，再生成预览包。自检覆盖 900×640 窗口、100% / 125% / 150% 字体缩放、设置与诊断页底部按钮。详见 [Rust 完善与验证记录](docs/Rust修复与验证.md)和 [2.0.0-alpha.2 发布说明](docs/releases/rust-v2.0.0-alpha.2.md)。
 
 ## 来源与许可
 

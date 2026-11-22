@@ -89,6 +89,9 @@ class FishPage:
             preview, text="找到浮漂后显示游戏截图", anchor="center", wraplength=240
         )
         self.preview.pack(fill="both", expand=True)
+        wrapped_label(
+            preview, "找到浮漂后，请保持游戏镜头和缩放不变。", bootstyle="secondary"
+        ).pack(fill="x", pady=(6, 0))
         self._photo = self._last_png = None
         self._preview_size = (0, 0)
         self.preview.bind("<Configure>", self._resize_preview)

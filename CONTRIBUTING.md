@@ -59,3 +59,15 @@ cargo check --workspace --all-targets --target x86_64-pc-windows-msvc --locked
 音频数值测试读取 `crates/foreverfish/tests/fixtures/python_audio.json` 中的 Python 参考数据。修改共同算法时，在确认 Python 行为正确后运行 `uv run python scripts/rust/generate_audio_parity.py` 更新，并检查参考值变化。Rust 测试与运行不依赖 Python。
 
 Rust 发布版本定义在根 `Cargo.toml` 的 `workspace.package.version` 中，还需更新 `Cargo.lock`、`crates/foreverfish/windows.manifest` 的数字版本，以及 `docs/releases/rust-vX.Y.Z.md`。预览标签为 `rust-vX.Y.Z`，与 Python 的 `vX.Y.Z` 标签分别使用各自的发布流程。
+
+## 跟踪上游
+
+`.github/upstream.json` 记录已评审的上游提交，采用与验证记录位于 [持续优化记录](docs/持续优化.md)。检查只需要 Python 3.12+ 的标准库：
+
+```bash
+python3 scripts/check_upstream.py --fail-on-changes
+```
+
+报告写入 `checks/upstream/upstream.json` 和 `upstream.md`。退出码 0 表示已评审到当前上游提交，1 表示存在待评审变化，2 表示请求、配置或报告写入失败。脚本先解析上游分支的固定提交，再生成比较报告。
+
+先对照变更文件确认功能与兼容性，补充有意义的回归验证并更新采用记录，再修改 `reviewed_commit` 和 `reviewed_at`。`Upstream Review` 工作流在默认分支每日运行，也支持手动触发；未评审变化会使检查失败，并上传差异报告。Python CI 同时覆盖 `main` 与 `rust-rewrite`，便于验证两个实现的共同修改。

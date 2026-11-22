@@ -47,6 +47,7 @@ SCORES_EVERY_S = 0.1  # ...and send each clip's peak score this often, for the G
 SLEEP_SLICE_S = 0.1
 RESWEEP_AFTER_TIMEOUTS = 2  # icon timeouts in a row before the next cast measures the icon again
 JUMP_LANDING_S = (1.0, 1.5)  # Fishing cannot be cast mid-air; wait this long after a jump
+MEASURE_AFTER_S = 1.5  # Let the bobber land before matching or measuring its gear.
 QUIT_WAIT_S = 30.0  # away from an inn, /quit counts down 20 s before the game closes
 QUIT_TRIES = 3  # quit key presses before giving up on closing the game
 # Casts in a row that heard a splash, held it back on the picture alone and never reeled in.
@@ -91,8 +92,7 @@ class FishingEngine:
         self._on_calibrated = on_calibrated or (lambda cal: None)
         self._find_window = find_window
         self.threshold = cfg.vision.icon_threshold
-        # The saved size (if any) is only a first guess: every run measures the icon on its
-        # first cast, since resolution and UI scale change the icon's size on screen.
+        # The saved size is a first guess; the sweep remeasures it after repeated timeouts.
         self.matcher = matcher if matcher is not None else None
         if self.matcher is None and cfg.vision.icon_size_px > 0:
             self.matcher = self._matcher_factory(cfg.vision.icon_size_px)
@@ -117,6 +117,7 @@ class FishingEngine:
         self._stop = False
         self._resume_state = State.IDLE
         self._t_cast = 0.0
+        self._before_cast: np.ndarray | None = None
         self._t_interact = 0.0
         self._icon_xy: tuple[int, int] | None = None
         self._icon_size = 0
@@ -223,6 +224,7 @@ class FishingEngine:
         if focused is False or self.window.minimized or self._user_paused.is_set():
             if self.state is not State.PAUSED:
                 self._resume_state = self.state
+                self._before_cast = None
                 self.state = State.PAUSED
                 reason = msg("user_pause") if self._user_paused.is_set() else UNFOCUSED
                 self._emit(ev.Paused(self._t(), reason))
@@ -274,7 +276,11 @@ class FishingEngine:
         clear = getattr(self.audio, "clear", None)
         if clear is not None:  # a pause, break, or jump left audio queued; hear this cast live
             clear()
+        # A gear already visible here may be a UI button or the previous cast's bobber.
+        # Keep the snapshot for the saved-size path as well as automatic calibration.
+        self._before_cast = self.capturer.grab()
         if not self._press(key, "cast"):
+            self._before_cast = None
             return
         self.stats = ev.Stats(
             self._t(), self.stats.casts + 1, self.stats.catches, self.stats.misses,
@@ -292,6 +298,16 @@ class FishingEngine:
         )
 
     def _acquire(self, now: float) -> None:
+        if now - self._t_cast > self.cfg.run.icon_timeout_s:
+            self._emit(ev.Timeout(self._t(), "icon", self.cfg.run.icon_timeout_s))
+            self._icon_timeouts += 1
+            if self._icon_timeouts >= RESWEEP_AFTER_TIMEOUTS:
+                self._sweeping = True
+            self._visual_misses = 0
+            self._miss(msg("no_icon"))
+            return
+        if now - self._t_cast < MEASURE_AFTER_S:
+            return
         if now - self._last_acquire < 0.1:
             return
         self._last_acquire = now
@@ -300,7 +316,7 @@ class FishingEngine:
         region = Region(v.search_left, v.search_top, v.search_right, v.search_bottom)
         if self.search is not None:  # fast path: the saved or last measured size
             m = self.matcher.match(frame, region)
-            if m.accepted(self.threshold):
+            if m.accepted(self.threshold) and not self._was_there_before_cast(m):
                 self._icon_timeouts = 0
                 self._sweeping = False
                 self._found(frame, m)
@@ -309,17 +325,29 @@ class FishingEngine:
             x0, y0, x1, y1 = region.to_box(frame.shape[1], frame.shape[0])
             cal = self._calibrate(frame[y0:y1, x0:x1], match_width=self.cfg.vision.match_width)
             cal = replace(cal, x=cal.x + x0, y=cal.y + y0)
-            if cal.valid:
+            measured = IconMatch(cal.score, cal.x, cal.y, cal.icon_size_px, cal.gold)
+            if cal.valid and not self._was_there_before_cast(measured, cal.suggested_threshold()):
                 self._use_calibration(cal)
                 self._icon_timeouts = 0
-                self._found(frame, IconMatch(cal.score, cal.x, cal.y, cal.icon_size_px, cal.gold))
+                self._found(frame, measured)
                 return
-        if now - self._t_cast > self.cfg.run.icon_timeout_s:
-            self._emit(ev.Timeout(self._t(), "icon", self.cfg.run.icon_timeout_s))
-            self._icon_timeouts += 1
-            if self._icon_timeouts >= RESWEEP_AFTER_TIMEOUTS:
-                self._sweeping = True
-            self._miss(msg("no_icon"))
+
+    def _was_there_before_cast(self, candidate: IconMatch, threshold: float | None = None) -> bool:
+        before = self._before_cast
+        if before is None:
+            return False
+        h, w = before.shape[:2]
+        radius = max(12, candidate.size) * 2
+        region = Region(
+            max(0.0, (candidate.x - radius) / w),
+            max(0.0, (candidate.y - radius) / h),
+            min(1.0, (candidate.x + radius) / w),
+            min(1.0, (candidate.y + radius) / h),
+        )
+        matcher = self._matcher_factory(candidate.size)
+        previous = matcher.match(before, region)
+        near = max(abs(previous.x - candidate.x), abs(previous.y - candidate.y)) <= candidate.size
+        return bool(near and previous.accepted(self.threshold if threshold is None else threshold))
 
     def _use_calibration(self, cal: Any) -> None:
         self.matcher = self._matcher_factory(cal.icon_size_px)
@@ -330,6 +358,7 @@ class FishingEngine:
         self._on_calibrated(cal)
 
     def _found(self, frame: np.ndarray, m: Any) -> None:
+        self._before_cast = None
         self._icon_xy = (m.x, m.y)
         self._icon_size = m.size
         self._misses = 0
@@ -395,7 +424,10 @@ class FishingEngine:
         """The cast ended without reeling in. If the picture check held back a splash on it,
         count that, and stop letting the check veto once it has done so several casts running:
         a bobber that goes unanswered every cast is worse than answering a neighbour's splash."""
-        if self.verifier is None or not self._bite_rejected:
+        if self.verifier is None:
+            return
+        if not self._bite_rejected and self._candidate is None:
+            self._visual_misses = 0
             return
         self._visual_misses += 1
         if self._visual_misses >= VISUAL_MISSES_BEFORE_BYPASS:
@@ -614,6 +646,7 @@ class FishingEngine:
             nxt = msg("recast", seconds=pause)
         self._change(State.IDLE, did, nxt)
         self._icon_xy = None
+        self._before_cast = None
         self._wait(rest + pause, watch_focus=True)
 
     def _wait(self, seconds: float, *, watch_focus: bool = False) -> bool:
@@ -717,6 +750,7 @@ class FishingEngine:
         self._emit(self.stats)
 
     def _finish(self, reason: str) -> None:
+        self._before_cast = None
         if self.state is State.STOPPED:
             return
         self._emit_stats()

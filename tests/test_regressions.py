@@ -1134,6 +1134,40 @@ def test_a_confirmed_bite_keeps_the_picture_check_and_rejections_report_what_was
     assert e.verifier is verifier  # one loss since the last confirmed bite, not two in a row
 
 
+def test_an_unheard_cast_breaks_the_picture_check_failure_streak():
+    io = FakeIO()
+    verifier = SimpleNamespace(confirmed=lambda _: False, reset=lambda: None)
+    e = engine(io, bite_verifier=verifier)
+    _lose_a_heard_bite(e, io)
+    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
+    io.score = 0.0
+    for _ in range(3):
+        io.t += 0.3
+        e._wait_bite(io.t, [])
+    assert e.state is State.IDLE
+    io.score = 0.9
+    _lose_a_heard_bite(e, io)
+    assert e.verifier is verifier
+
+
+def test_pending_picture_confirmation_counts_when_the_cast_times_out():
+    io = FakeIO()
+    e = engine(io, bite_verifier=SimpleNamespace(confirmed=lambda _: False, reset=lambda: None))
+    e.cfg = replace(
+        e.cfg,
+        vision=replace(e.cfg.vision, confirm_window_s=2.0),
+        run=replace(e.cfg.run, cast_timeout_s=0.5),
+    )
+    for _ in range(2):
+        e._t_cast = io.t
+        e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
+        e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
+        io.t += 0.6
+        e._wait_bite(io.t, [])
+        assert e.state is State.IDLE and io.pressed == []
+    assert e.verifier is None
+
+
 @pytest.mark.parametrize("size", [12, 14, 16, 18])
 def test_small_icons_keep_detail_on_wide_windows(size):
     templates = load_icon_templates()

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -49,12 +50,25 @@ def list_app_streams(*, dump: Callable[[], str] | None = None) -> list[AppStream
         objects = json.loads(text)
     except ValueError as e:
         raise AudioUnavailable(f"unexpected pw-dump output: {e}") from e
+
+    def props_of(obj: object) -> dict:
+        return ((obj.get("info") or {}).get("props") or {}) if isinstance(obj, dict) else {}
+
+    # Native PipeWire nodes keep the owning PID on their Client, while Wine's PulseAudio
+    # streams normally carry application.process.id directly on the playback node.
+    client_pids: dict[str, int] = {}
+    for obj in objects:
+        if isinstance(obj, dict) and str(obj.get("type", "")).endswith(":Client"):
+            props = props_of(obj)
+            pid = props.get("application.process.id", props.get("pipewire.sec.pid"))
+            if pid is not None:
+                client_pids[str(obj.get("id"))] = int(pid)
     out: list[AppStream] = []
     for obj in objects:
-        props = ((obj.get("info") or {}).get("props") or {}) if isinstance(obj, dict) else {}
+        props = props_of(obj)
         if props.get("media.class") != STREAM_CLASS or "object.serial" not in props:
             continue
-        pid = props.get("application.process.id")
+        pid = props.get("application.process.id", client_pids.get(str(props.get("client.id"))))
         out.append(
             AppStream(
                 int(props["object.serial"]),
@@ -66,11 +80,39 @@ def list_app_streams(*, dump: Callable[[], str] | None = None) -> list[AppStream
     return out
 
 
-def pick_stream(streams: Sequence[AppStream], *, pid: int | None, name: str) -> AppStream | None:
-    """The stream of process `pid` if there is one, else the first whose name contains `name`."""
+def _parent_pid(pid: int) -> int | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        return int(stat.rsplit(")", 1)[1].split()[1])  # state, ppid after the process name
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _descends_from(pid: int, ancestor: int, parent_of: Callable[[int], int | None]) -> bool:
+    seen: set[int] = set()
+    current: int | None = pid
+    while current is not None and current > 1 and current not in seen and len(seen) < 64:
+        seen.add(current)
+        current = parent_of(current)
+        if current == ancestor:
+            return True
+    return False
+
+
+def pick_stream(
+    streams: Sequence[AppStream],
+    *,
+    pid: int | None,
+    name: str,
+    parent_of: Callable[[int], int | None] = _parent_pid,
+) -> AppStream | None:
+    """Prefer the selected process, then its children; name matching is only for unbound use."""
     if pid is not None:
         for s in streams:
             if s.pid == pid:
+                return s
+        for s in streams:
+            if s.pid is not None and _descends_from(s.pid, pid, parent_of):
                 return s
         return None  # an explicitly bound client must not hear another same-title process
     wanted = name.lower()

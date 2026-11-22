@@ -251,8 +251,48 @@ type Emit<'a> = &'a (dyn Fn(Event) + Sync);
 /// Unread audio kept while the worker is busy (4 s, as in the Python reader thread).
 const MAX_QUEUED_SAMPLES: usize = audio::RATE as usize * 4;
 
+#[derive(Default)]
+struct AudioBuffer {
+    packets: VecDeque<Vec<f32>>,
+    samples: usize,
+    discontinuous: bool,
+}
+
+struct AudioBatch {
+    packets: Vec<Vec<f32>>,
+    discontinuous: bool,
+}
+
+impl AudioBuffer {
+    fn push(&mut self, packet: Vec<f32>) {
+        self.samples += packet.len();
+        self.packets.push_back(packet);
+        while self.samples > MAX_QUEUED_SAMPLES {
+            let mut oldest = self.packets.pop_front().unwrap();
+            let drop = oldest.len().min(self.samples - MAX_QUEUED_SAMPLES);
+            self.samples -= drop;
+            if drop < oldest.len() {
+                self.packets.push_front(oldest.split_off(drop));
+            }
+            self.discontinuous = true;
+        }
+    }
+    fn clear(&mut self) {
+        self.packets.clear();
+        self.samples = 0;
+        self.discontinuous = true;
+    }
+    fn drain(&mut self) -> AudioBatch {
+        self.samples = 0;
+        AudioBatch {
+            packets: self.packets.drain(..).collect(),
+            discontinuous: std::mem::take(&mut self.discontinuous),
+        }
+    }
+}
+
 struct Stream {
-    packets: Arc<Mutex<VecDeque<Vec<f32>>>>,
+    packets: Arc<Mutex<AudioBuffer>>,
     failure: Arc<Mutex<Option<String>>>,
     opened: Arc<AtomicBool>,
     cancel: Cancel,
@@ -267,7 +307,7 @@ impl Stream {
         emit: Sender<(u64, Event)>,
         id: u64,
     ) -> Self {
-        let packets = Arc::new(Mutex::new(VecDeque::new()));
+        let packets = Arc::new(Mutex::new(AudioBuffer::default()));
         let failure = Arc::new(Mutex::new(None));
         let opened = Arc::new(AtomicBool::new(false));
         let cancel = Cancel::default();
@@ -308,14 +348,9 @@ impl Stream {
                             retries = 0;
                         }
                         let mut queue = out.lock().unwrap();
-                        queue.push_back(samples);
-                        // Bound by duration, not packet count: packets are about 10 ms, and one
-                        // lost packet inside the 0.8 s fingerprint window sinks a real splash
-                        // below the threshold. A slow screenshot must never drop audio.
-                        let mut held: usize = queue.iter().map(Vec::len).sum();
-                        while held > MAX_QUEUED_SAMPLES && queue.len() > 1 {
-                            held -= queue.pop_front().map_or(0, |packet| packet.len());
-                        }
+                        queue.push(samples);
+                        // Hold up to 4 s across slow screenshots. If the limit is exceeded,
+                        // the next drain resets detection instead of joining across the gap.
                     }
                     Ok(_) => {
                         stop.wait(Duration::from_millis(5));
@@ -351,11 +386,11 @@ impl Stream {
             thread: Some(thread),
         }
     }
-    fn drain(&self) -> Result<Vec<Vec<f32>>> {
+    fn drain(&self) -> Result<AudioBatch> {
         if let Some(failure) = self.failure.lock().unwrap().as_ref() {
             anyhow::bail!("{failure}");
         }
-        Ok(self.packets.lock().unwrap().drain(..).collect())
+        Ok(self.packets.lock().unwrap().drain())
     }
 }
 impl Drop for Stream {
@@ -424,13 +459,12 @@ fn run_task(task: Task, cancel: &Cancel, paused: Arc<AtomicBool>, emit: Emit<'_>
                 let mut detector =
                     Detector::new(config.audio.bite_threshold, config.audio.refractory_s)?;
                 while !cancel.is_cancelled() {
-                    for (_, event) in receiver.try_iter() {
-                        if matches!(event, Event::Source { .. }) {
-                            detector.reset();
-                        }
-                        emit(event);
+                    relay(receiver, emit);
+                    let batch = stream.drain()?;
+                    if batch.discontinuous {
+                        detector.reset();
                     }
-                    for samples in stream.drain()? {
+                    for samples in batch.packets {
                         let result = detector.feed(&samples, cancel)?;
                         send_scores(&result, emit);
                         for bite in result.bites {
@@ -469,7 +503,7 @@ fn run_task(task: Task, cancel: &Cancel, paused: Arc<AtomicBool>, emit: Emit<'_>
                     while !cancel.is_cancelled() && started.elapsed().as_secs_f64() < seconds as f64
                     {
                         relay(receiver, emit);
-                        for samples in stream.drain()? {
+                        for samples in stream.drain()?.packets {
                             for value in samples {
                                 writer.write_sample(
                                     (value * 32767.0).clamp(-32768.0, 32767.0) as i16
@@ -620,6 +654,7 @@ fn fish(
     let mut matcher = Matcher::new(config.vision.match_width)?;
     let mut motion = Motion::new(config.vision.motion_threshold);
     let mut engine = Engine::new(config);
+    let mut before_cast = None;
     let start = Instant::now();
     let mut last_vision = f64::NEG_INFINITY;
     let mut last_snapshot = f64::NEG_INFINITY;
@@ -627,13 +662,7 @@ fn fish(
     // Best clip score since the icon was found, reported when a wait ends without a reel-in.
     let mut heard: Option<(usize, f32)> = None;
     while engine.state != State::Stopped && !cancel.is_cancelled() {
-        for (_, event) in receiver.try_iter() {
-            if matches!(event, Event::Source { .. }) {
-                detector.reset();
-                motion.reset();
-            }
-            emit(event);
-        }
+        relay(receiver, emit);
         let tick = Instant::now();
         let now = start.elapsed().as_secs_f64();
         let fresh = platform::refresh(&window)?;
@@ -648,7 +677,16 @@ fn fish(
             observed.focused = platform::focused(&window) && !window.minimized;
         }
         engine.manual_paused = paused.load(Ordering::Acquire);
-        for samples in stream.drain()? {
+        let batch = stream.drain()?;
+        // Reset together with the affected samples; a delayed Source event must not discard
+        // a bite already recognised from the newly opened stream.
+        if batch.discontinuous {
+            detector.reset();
+            motion.reset();
+            engine.reset_audio();
+            heard = None;
+        }
+        for samples in batch.packets {
             if engine.state == State::Waiting && !engine.manual_paused && observed.focused {
                 let result = detector.feed(&samples, cancel)?;
                 observed.bite = result.bites.first().cloned().or(observed.bite);
@@ -664,7 +702,7 @@ fn fish(
         }
         if observed.focused
             && !engine.manual_paused
-            && engine.wants_vision()
+            && engine.wants_vision(now)
             && now - last_vision >= 0.1
             && !observed.resized
         {
@@ -687,6 +725,23 @@ fn fish(
             let mut found = IconMatch::none(engine.cfg.vision.icon_size_px.max(12));
             if engine.cfg.vision.icon_size_px > 0 {
                 found = matcher.find(&frame, engine.cfg.vision.icon_size_px, region, cancel)?;
+                if engine.state == State::Casting
+                    && found.accepted(engine.cfg.vision.icon_threshold)
+                    && before_cast
+                        .as_ref()
+                        .map(|before| {
+                            matcher.was_present(
+                                before,
+                                found,
+                                engine.cfg.vision.icon_threshold,
+                                cancel,
+                            )
+                        })
+                        .transpose()?
+                        .unwrap_or(false)
+                {
+                    found = IconMatch::none(found.size);
+                }
             }
             if engine.state == State::Casting
                 && !found.accepted(engine.cfg.vision.icon_threshold)
@@ -694,7 +749,15 @@ fn fish(
             {
                 last_sweep = now;
                 let cal = matcher.calibrate(&frame, allowed, cancel)?;
-                if cal.valid() {
+                let was_present = cal.valid()
+                    && before_cast
+                        .as_ref()
+                        .map(|before| {
+                            matcher.was_present(before, cal.icon, cal.threshold(), cancel)
+                        })
+                        .transpose()?
+                        .unwrap_or(false);
+                if cal.valid() && !was_present {
                     engine.cfg.vision.icon_size_px = cal.icon.size;
                     engine.cfg.vision.icon_native_size = cal.native_size;
                     engine.cfg.vision.icon_threshold = cal.threshold();
@@ -713,7 +776,7 @@ fn fish(
             }
             observed.icon = Some(found);
             if let Some(icon) = engine.icon {
-                if engine.state == State::Waiting && engine.cfg.vision.confirm_bite {
+                if engine.state == State::Waiting && engine.visual_confirmation_enabled() {
                     let side = icon.size.max(16);
                     let x0 = icon.x.saturating_sub(side * 2);
                     let y0 = icon.y.saturating_sub(side);
@@ -739,17 +802,36 @@ fn fish(
         observed.focused &= platform::focused(&window);
         engine.manual_paused = paused.load(Ordering::Acquire);
         let previous = engine.state;
-        for action in engine.tick(start.elapsed().as_secs_f64(), observed) {
+        let mut actions: VecDeque<_> = engine.tick(start.elapsed().as_secs_f64(), observed).into();
+        while let Some(action) = actions.pop_front() {
             match action {
+                Action::CaptureBeforeCast => {
+                    before_cast = if !paused.load(Ordering::Acquire)
+                        && !cancel.is_cancelled()
+                        && platform::focused(&window)
+                    {
+                        Some(platform::capture(&window, Region::default())?)
+                    } else {
+                        None
+                    };
+                }
                 Action::Press { key, hold_ms } => {
-                    if !paused.load(Ordering::Acquire) {
-                        platform::press(&window, &key, hold_ms, cancel)?;
+                    let sent = !paused.load(Ordering::Acquire)
+                        && platform::press(&window, &key, hold_ms, cancel)?;
+                    if sent {
+                        engine.key_pressed(start.elapsed().as_secs_f64());
+                    } else {
+                        engine.manual_paused = paused.load(Ordering::Acquire);
+                        actions = engine.key_cancelled().into();
                     }
                 }
                 Action::ResetDetection => {
                     detector.reset();
                     motion.reset();
                     let _ = stream.drain()?;
+                    if engine.state != State::Casting {
+                        before_cast = None;
+                    }
                 }
                 Action::Message(message) | Action::Finished(message) => {
                     emit(Event::Message(message))
@@ -788,6 +870,42 @@ fn fish(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_backlog_is_bounded_by_samples_and_preserves_the_newest_audio() {
+        let mut buffer = AudioBuffer::default();
+        buffer.push(vec![0.0; MAX_QUEUED_SAMPLES - 2]);
+        buffer.push(vec![1.0; 5]);
+        let batch = buffer.drain();
+        assert!(batch.discontinuous);
+        assert_eq!(
+            batch.packets.iter().map(Vec::len).sum::<usize>(),
+            MAX_QUEUED_SAMPLES
+        );
+        assert_eq!(batch.packets.last().unwrap(), &[1.0; 5]);
+        let empty = buffer.drain();
+        assert!(empty.packets.is_empty() && !empty.discontinuous);
+
+        buffer.push(vec![2.0; MAX_QUEUED_SAMPLES + 10]);
+        let batch = buffer.drain();
+        assert!(batch.discontinuous);
+        assert_eq!(batch.packets.len(), 1);
+        assert_eq!(batch.packets[0].len(), MAX_QUEUED_SAMPLES);
+    }
+
+    #[test]
+    fn disconnected_audio_discards_old_packets_and_marks_the_next_batch() {
+        let mut buffer = AudioBuffer::default();
+        buffer.push(vec![0.0; 100]);
+        assert!(!buffer.drain().discontinuous);
+        buffer.push(vec![1.0; 100]);
+        buffer.clear();
+        buffer.push(vec![2.0; 50]);
+        let batch = buffer.drain();
+        assert!(batch.discontinuous);
+        assert_eq!(batch.packets, vec![vec![2.0; 50]]);
+        assert!(!buffer.drain().discontinuous);
+    }
 
     #[test]
     fn canceled_result_is_discarded_and_queued_task_waits_for_cleanup() {

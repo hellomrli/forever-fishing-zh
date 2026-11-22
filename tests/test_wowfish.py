@@ -432,10 +432,12 @@ class _Pond:
         pass
 
     def grab(self, box=None) -> np.ndarray:
-        return np.zeros((10, 10, 3), np.uint8)
+        frame = np.zeros((10, 10, 3), np.uint8)
+        frame[0, 0, 0] = 255 if self.bobber else 0
+        return frame
 
     def match(self, frame, region=None, full_width=None) -> IconMatch:
-        return IconMatch(0.9 if self.bobber else 0.0, 5, 5, 4, 1.0)
+        return IconMatch(0.9 if frame[0, 0, 0] else 0.0, 5, 5, 4, 1.0)
 
     def press_key(self, key: str, hold_s: float) -> None:
         self.pressed.append((self.t, key, hold_s))

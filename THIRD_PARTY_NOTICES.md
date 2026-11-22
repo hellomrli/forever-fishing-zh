@@ -2,6 +2,8 @@
 
 本项目由 [rsamf/wow-fishing-forever](https://github.com/rsamf/wow-fishing-forever) 的 MIT 源代码继续开发，参考提交为 `7e37aca73e018077087fe8bf34c05fd012babda4`。
 
+2026-11-22 继续评审上游至 `97653ba0566d2e1c14b70848888c76f674f7655e`，参考其浮漂落水等待、抛竿前图标核对、PipeWire 客户端 PID 与子进程音频选择。采用记录见 [持续优化记录](docs/持续优化.md)。
+
 保留原项目 `LICENSE` 中 Richard Franklin 的版权声明。`src/wowfish/assets/` 中的交互图标和水花音频沿用原项目素材，相关游戏内容和名称归原权利人。本项目与游戏运营方没有关联。
 
 主要运行依赖为 Python / Tcl-Tk、NumPy、OpenCV、soundcard、ttkbootstrap / Pillow、mss、Typer、Loguru、platformdirs、tomlkit、tomli-w 和 filelock，各依赖保留其原有许可证。

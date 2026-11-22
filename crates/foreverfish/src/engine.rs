@@ -52,6 +52,7 @@ pub struct Stats {
 
 #[derive(Clone, Debug)]
 pub enum Action {
+    CaptureBeforeCast,
     Press { key: String, hold_ms: u32 },
     ResetDetection,
     Message(String),
@@ -73,6 +74,8 @@ pub struct Observation {
 /// The icon counts as lost only after this long without a match: the splash is recognised
 /// about 0.9 s after it starts, so a brief flicker must not recast first (Python: 0.75 s).
 const ICON_LOST_S: f64 = 0.75;
+pub const MEASURE_AFTER_S: f64 = 1.5;
+const VISUAL_MISSES_BEFORE_BYPASS: u32 = 2;
 
 impl Default for Observation {
     fn default() -> Self {
@@ -99,12 +102,16 @@ pub struct Engine {
     rng: StdRng,
     started: Option<f64>,
     deadline: f64,
+    tick_at: f64,
     cast_at: f64,
     interact_at: f64,
     lure_at: Option<f64>,
     disappeared: Option<f64>,
     misses: usize,
     candidate: Option<(Bite, f64)>,
+    bite_rejected: bool,
+    visual_misses: u32,
+    visual_bypassed: bool,
     resume_busy: bool,
     next_break: Option<f64>,
     quit_tries: u32,
@@ -125,12 +132,16 @@ impl Engine {
             rng: StdRng::seed_from_u64(seed),
             started: None,
             deadline: 0.0,
+            tick_at: 0.0,
             cast_at: 0.0,
             interact_at: 0.0,
             lure_at: None,
             disappeared: None,
             misses: 0,
             candidate: None,
+            bite_rejected: false,
+            visual_misses: 0,
+            visual_bypassed: false,
             resume_busy: false,
             next_break: None,
             quit_tries: 0,
@@ -143,8 +154,51 @@ impl Engine {
     pub fn stop(&mut self) {
         self.stopping = true;
     }
-    pub fn wants_vision(&self) -> bool {
-        matches!(self.state, State::Casting | State::Waiting | State::Looting)
+    pub fn wants_vision(&self, now: f64) -> bool {
+        match self.state {
+            State::Casting => {
+                let elapsed = now - self.cast_at;
+                elapsed >= MEASURE_AFTER_S && elapsed <= self.cfg.run.icon_timeout_s
+            }
+            State::Waiting | State::Looting => true,
+            _ => false,
+        }
+    }
+    pub fn visual_confirmation_enabled(&self) -> bool {
+        self.cfg.vision.confirm_bite && !self.visual_bypassed
+    }
+    pub fn reset_audio(&mut self) {
+        self.candidate = None;
+        self.bite_rejected = false;
+    }
+    /// Capture and key delivery may take time; gameplay deadlines start after delivery.
+    pub fn key_pressed(&mut self, now: f64) {
+        match self.state {
+            State::Casting => self.cast_at = now,
+            State::Looting => self.interact_at = now,
+            State::Lure | State::Jump | State::Quitting => {
+                self.deadline += (now - self.tick_at).max(0.0);
+            }
+            _ => {}
+        }
+    }
+    pub fn key_cancelled(&mut self) -> Vec<Action> {
+        let mut actions = vec![Action::ResetDetection];
+        if self.state == State::Quitting {
+            self.finish("退出按键发送前游戏失去焦点，已停止", &mut actions);
+        } else {
+            if self.state == State::Casting {
+                self.stats.casts = self.stats.casts.saturating_sub(1);
+            }
+            self.resume_busy = self.state.busy() && self.state != State::Casting;
+            self.state = State::Paused;
+            self.icon = None;
+            self.reset_audio();
+            actions.push(Action::Message(
+                "按键发送前游戏失去焦点或已暂停；继续后重新抛竿".into(),
+            ));
+        }
+        actions
     }
 
     pub fn tick(&mut self, now: f64, observed: Observation) -> Vec<Action> {
@@ -152,6 +206,7 @@ impl Engine {
         if self.state == State::Stopped {
             return actions;
         }
+        self.tick_at = now;
         if self.started.is_none() {
             self.started = Some(now);
             self.schedule_break(now);
@@ -204,6 +259,7 @@ impl Engine {
             if self.state != State::Paused {
                 self.resume_busy = self.state.busy();
                 self.state = State::Paused;
+                self.reset_audio();
                 actions.push(Action::Message(
                     if self.manual_paused {
                         "手动暂停；继续后重新抛竿"
@@ -263,10 +319,17 @@ impl Engine {
             }
             State::Jump if now >= self.deadline => self.cast(now, &mut actions),
             State::Casting => {
-                if let Some(icon) = observed
-                    .icon
-                    .filter(|m| m.accepted(self.cfg.vision.icon_threshold))
-                {
+                if now - self.cast_at > self.cfg.run.icon_timeout_s {
+                    self.visual_misses = 0;
+                    self.miss(
+                        now,
+                        "未找到金色齿轮，请检查命令、校准和水面范围",
+                        &mut actions,
+                    );
+                } else if let Some(icon) = observed.icon.filter(|m| {
+                    now - self.cast_at >= MEASURE_AFTER_S
+                        && m.accepted(self.cfg.vision.icon_threshold)
+                }) {
                     self.icon = Some(icon);
                     self.misses = 0;
                     self.candidate = None;
@@ -277,12 +340,6 @@ impl Engine {
                         "找到齿轮（{} 像素，得分 {:.2}），等待水花",
                         icon.size, icon.score
                     )));
-                } else if now - self.cast_at > self.cfg.run.icon_timeout_s {
-                    self.miss(
-                        now,
-                        "未找到金色齿轮，请检查命令、校准和水面范围",
-                        &mut actions,
-                    );
                 }
             }
             State::Waiting => {
@@ -295,9 +352,10 @@ impl Engine {
                     self.candidate = Some((bite, now + self.cfg.vision.confirm_window_s));
                 }
                 if let Some((bite, until)) = &self.candidate {
-                    if !self.cfg.vision.confirm_bite || observed.visual_confirmed {
+                    if !self.visual_confirmation_enabled() || observed.visual_confirmed {
                         let score = bite.score;
                         self.candidate = None;
+                        self.visual_misses = 0;
                         if self.chance(self.cfg.behavior.skip_bite_chance) {
                             self.miss(now, "按可选行为设置跳过本次咬钩", &mut actions);
                         } else {
@@ -307,12 +365,15 @@ impl Engine {
                                     self.cfg.behavior.reaction_min_ms as f64,
                                     self.cfg.behavior.reaction_max_ms as f64,
                                 ) / 1000.0;
-                            actions.push(Action::Message(format!(
-                                "水花与画面确认通过（{score:.2}），准备互动"
-                            )));
+                            actions.push(Action::Message(if self.visual_confirmation_enabled() {
+                                format!("水花与画面确认通过（{score:.2}），准备互动")
+                            } else {
+                                format!("识别到水花（{score:.2}），准备互动")
+                            }));
                         }
                     } else if now >= *until {
                         self.candidate = None;
+                        self.bite_rejected = true;
                         actions.push(Action::Message(match observed.motion {
                             Some((change, bar)) => format!(
                                 "水花缺少局部画面变化（最大 {change:.1}，需要 {bar:.1}），继续等待"
@@ -335,8 +396,10 @@ impl Engine {
                     if self.misses >= 3
                         && self.disappeared.is_some_and(|at| now - at >= ICON_LOST_S)
                     {
+                        self.note_visual_miss(&mut actions);
                         self.miss(now, "浮漂图标连续丢失，重新抛竿", &mut actions);
                     } else if now - self.cast_at > self.cfg.run.cast_timeout_s {
+                        self.note_visual_miss(&mut actions);
                         self.miss(now, "等待咬钩超时", &mut actions);
                     }
                 }
@@ -402,20 +465,39 @@ impl Engine {
     fn cast(&mut self, now: f64, actions: &mut Vec<Action>) {
         self.icon = None;
         self.candidate = None;
+        self.bite_rejected = false;
         self.disappeared = None;
         self.misses = 0;
         actions.push(Action::ResetDetection);
+        actions.push(Action::CaptureBeforeCast);
         let key = self.cfg.game.cast_key.clone();
         self.press(key, actions);
         self.cast_at = now;
         self.stats.casts += 1;
         self.state = State::Casting;
-        actions.push(Action::Message("已抛竿，寻找金色齿轮".into()));
+        actions.push(Action::Message("已抛竿，等待浮漂落水后寻找金色齿轮".into()));
     }
     fn miss(&mut self, now: f64, message: &str, actions: &mut Vec<Action>) {
         self.stats.misses += 1;
         self.rest(now, actions);
         actions.push(Action::Message(message.into()));
+    }
+    fn note_visual_miss(&mut self, actions: &mut Vec<Action>) {
+        if !self.visual_confirmation_enabled() {
+            return;
+        }
+        if !self.bite_rejected && self.candidate.is_none() {
+            self.visual_misses = 0;
+            return;
+        }
+        self.visual_misses += 1;
+        if self.visual_misses >= VISUAL_MISSES_BEFORE_BYPASS {
+            self.visual_bypassed = true;
+            actions.push(Action::Message(format!(
+                "画面确认已连续 {} 竿拦下水花且没有收杆，本次运行改为听到水花就收杆；可调低画面变化阈值或关闭画面确认",
+                self.visual_misses
+            )));
+        }
     }
     fn rest(&mut self, now: f64, actions: &mut Vec<Action>) {
         let mut wait = self.uniform(self.cfg.run.pause_min_s, self.cfg.run.pause_max_s);
@@ -433,6 +515,7 @@ impl Engine {
         self.deadline = now + wait;
         self.state = State::Resting;
         self.icon = None;
+        self.candidate = None;
         actions.push(Action::ResetDetection);
     }
     fn schedule_break(&mut self, now: f64) {
@@ -481,14 +564,14 @@ mod tests {
         let mut engine = Engine::with_seed(cfg, 42);
         engine.tick(0.0, Observation::default());
         engine.tick(
-            0.2,
+            1.5,
             Observation {
                 icon: Some(icon()),
                 ..Default::default()
             },
         );
         engine.tick(
-            1.0,
+            2.0,
             Observation {
                 bite: Some(Bite {
                     clip: "test".into(),
@@ -498,7 +581,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        engine.tick(1.01, Observation::default());
+        engine.tick(2.01, Observation::default());
         assert_eq!(engine.state, State::Looting);
         engine
     }
@@ -506,21 +589,21 @@ mod tests {
     fn single_miss_and_recovery_do_not_count_a_catch() {
         let mut engine = looting();
         engine.tick(
-            1.1,
+            2.1,
             Observation {
                 icon: Some(IconMatch::none(29)),
                 ..Default::default()
             },
         );
         engine.tick(
-            1.4,
+            2.4,
             Observation {
                 icon: Some(icon()),
                 ..Default::default()
             },
         );
         assert_eq!(engine.stats.catches, 0);
-        for now in [1.5, 1.7, 2.0] {
+        for now in [2.5, 2.7, 3.0] {
             engine.tick(
                 now,
                 Observation {
@@ -540,7 +623,7 @@ mod tests {
         let mut engine = Engine::with_seed(cfg, 7);
         engine.tick(0.0, Observation::default());
         engine.tick(
-            0.2,
+            1.5,
             Observation {
                 icon: Some(icon()),
                 ..Default::default()
@@ -576,7 +659,7 @@ mod tests {
         let mut engine = Engine::with_seed(Config::default(), 7);
         engine.tick(0.0, Observation::default());
         engine.tick(
-            0.2,
+            1.5,
             Observation {
                 icon: Some(icon()),
                 ..Default::default()
@@ -625,14 +708,14 @@ mod tests {
         let mut engine = Engine::with_seed(Config::default(), 1);
         engine.tick(0.0, Observation::default());
         engine.tick(
-            0.2,
+            1.5,
             Observation {
                 icon: Some(icon()),
                 ..Default::default()
             },
         );
         engine.tick(
-            1.0,
+            2.0,
             Observation {
                 bite: Some(Bite {
                     clip: "other".into(),
@@ -642,10 +725,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        engine.tick(1.7, Observation::default());
+        engine.tick(2.7, Observation::default());
         assert_eq!(engine.state, State::Waiting);
         engine.tick(
-            2.0,
+            3.0,
             Observation {
                 bite: Some(Bite {
                     clip: "own".into(),
@@ -658,7 +741,7 @@ mod tests {
         );
         assert_eq!(engine.state, State::Reacting);
         let actions = engine.tick(
-            2.01,
+            3.01,
             Observation {
                 focused: false,
                 ..Default::default()
@@ -698,5 +781,228 @@ mod tests {
         let actions = engine.tick(60.0, Observation::default());
         assert_eq!(engine.state, State::Stopped);
         assert!(!actions.iter().any(|a| matches!(a, Action::Press { .. })));
+    }
+
+    #[test]
+    fn landing_wait_starts_after_key_delivery_and_remains_interruptible() {
+        let mut engine = Engine::with_seed(Config::default(), 1);
+        engine.tick(0.0, Observation::default());
+        engine.key_pressed(0.4); // The pre-cast capture and key hold took time.
+        engine.tick(
+            1.6,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(engine.state, State::Casting);
+        assert!(!engine.wants_vision(1.6));
+        assert!(engine.wants_vision(2.0));
+        engine.toggle_pause();
+        let actions = engine.tick(1.7, Observation::default());
+        assert_eq!(engine.state, State::Paused);
+        assert!(!actions.iter().any(|a| matches!(a, Action::Press { .. })));
+    }
+
+    #[test]
+    fn cancelled_cast_is_not_counted_and_can_resume_without_a_miss() {
+        let mut engine = Engine::with_seed(Config::default(), 1);
+        engine.tick(0.0, Observation::default());
+        let actions = engine.key_cancelled();
+        assert_eq!(engine.state, State::Paused);
+        assert_eq!(engine.stats.casts, 0);
+        assert!(!actions.iter().any(|a| matches!(a, Action::Press { .. })));
+        engine.tick(0.2, Observation::default());
+        engine.tick(0.3, Observation::default());
+        assert_eq!(engine.state, State::Casting);
+        assert_eq!(engine.stats.casts, 1);
+        assert_eq!(engine.stats.misses, 0);
+    }
+
+    #[test]
+    fn short_icon_timeout_expires_without_accepting_a_prelanding_icon() {
+        let mut cfg = Config::default();
+        cfg.run.icon_timeout_s = 0.5;
+        let mut engine = Engine::with_seed(cfg, 1);
+        engine.tick(0.0, Observation::default());
+        assert!(!engine.wants_vision(0.4));
+        engine.tick(
+            0.6,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(engine.state, State::Resting);
+        assert_eq!(engine.stats.misses, 1);
+    }
+
+    fn lost_cast(engine: &mut Engine, at: f64, heard: bool) -> Vec<Action> {
+        assert_eq!(engine.state, State::Idle);
+        engine.tick(at, Observation::default());
+        engine.tick(
+            at + 1.5,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        if heard {
+            engine.tick(
+                at + 2.0,
+                Observation {
+                    bite: Some(Bite {
+                        clip: "test".into(),
+                        score: 0.9,
+                        onset_s: 0.0,
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        let actions = engine.tick(
+            at + 3.1,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(engine.state, State::Resting);
+        engine.tick(at + 3.2, Observation::default());
+        actions
+    }
+
+    fn short_cast_config() -> Config {
+        let mut cfg = Config::default();
+        cfg.run.cast_timeout_s = 3.0;
+        cfg.run.pause_min_s = 0.0;
+        cfg.run.pause_max_s = 0.0;
+        cfg
+    }
+
+    #[test]
+    fn two_visually_blocked_casts_bypass_the_check_only_for_this_session() {
+        // A cast may end before its visual confirmation window expires.
+        for confirm_window in [0.6, 2.0] {
+            let mut cfg = short_cast_config();
+            cfg.vision.confirm_window_s = confirm_window;
+            let mut engine = Engine::with_seed(cfg.clone(), 1);
+            let mut actions = lost_cast(&mut engine, 0.0, true);
+            assert!(engine.visual_confirmation_enabled());
+            actions.extend(lost_cast(&mut engine, 4.0, true));
+            assert!(!engine.visual_confirmation_enabled());
+            assert!(engine.cfg.vision.confirm_bite);
+            assert_eq!(
+                actions
+                    .iter()
+                    .filter(|a| matches!(a, Action::Message(m) if m.contains("本次运行改为")))
+                    .count(),
+                1
+            );
+            engine.tick(8.0, Observation::default());
+            engine.tick(
+                9.5,
+                Observation {
+                    icon: Some(icon()),
+                    ..Default::default()
+                },
+            );
+            engine.tick(
+                10.0,
+                Observation {
+                    bite: Some(Bite {
+                        clip: "test".into(),
+                        score: 0.9,
+                        onset_s: 0.0,
+                    }),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(engine.state, State::Reacting);
+            assert!(Engine::new(cfg).visual_confirmation_enabled());
+        }
+    }
+
+    #[test]
+    fn an_unheard_cast_breaks_the_visual_failure_streak() {
+        let mut engine = Engine::with_seed(short_cast_config(), 1);
+        lost_cast(&mut engine, 0.0, true);
+        lost_cast(&mut engine, 4.0, false);
+        lost_cast(&mut engine, 8.0, true);
+        assert!(engine.visual_confirmation_enabled());
+    }
+
+    #[test]
+    fn confirmed_bite_resets_visual_failures_and_audio_gaps_discard_pending_bites() {
+        let mut engine = Engine::with_seed(short_cast_config(), 1);
+        lost_cast(&mut engine, 0.0, true);
+        engine.tick(4.0, Observation::default());
+        engine.tick(
+            5.5,
+            Observation {
+                icon: Some(icon()),
+                ..Default::default()
+            },
+        );
+        engine.tick(
+            6.0,
+            Observation {
+                bite: Some(Bite {
+                    clip: "test".into(),
+                    score: 0.9,
+                    onset_s: 0.0,
+                }),
+                ..Default::default()
+            },
+        );
+        engine.reset_audio();
+        engine.tick(
+            6.1,
+            Observation {
+                visual_confirmed: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(engine.state, State::Waiting);
+        engine.tick(
+            6.2,
+            Observation {
+                bite: Some(Bite {
+                    clip: "test".into(),
+                    score: 0.9,
+                    onset_s: 0.0,
+                }),
+                visual_confirmed: true,
+                ..Default::default()
+            },
+        );
+        engine.tick(6.3, Observation::default());
+        assert_eq!(engine.state, State::Looting);
+        for now in [6.4, 6.6, 6.9] {
+            engine.tick(
+                now,
+                Observation {
+                    icon: Some(IconMatch::none(29)),
+                    ..Default::default()
+                },
+            );
+        }
+        engine.tick(7.0, Observation::default());
+        lost_cast(&mut engine, 8.0, true);
+        assert!(engine.visual_confirmation_enabled());
+        assert_eq!(engine.stats.catches, 1);
+    }
+
+    #[test]
+    fn lure_wait_starts_after_the_key_is_delivered() {
+        let mut cfg = Config::default();
+        cfg.game.lure_key = "2".into();
+        let mut engine = Engine::with_seed(cfg, 1);
+        engine.tick(0.0, Observation::default());
+        engine.key_pressed(1.0);
+        engine.tick(6.1, Observation::default());
+        assert_eq!(engine.state, State::Lure);
+        engine.tick(7.0, Observation::default());
+        assert_eq!(engine.state, State::Idle);
     }
 }

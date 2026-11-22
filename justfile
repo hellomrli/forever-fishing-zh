@@ -39,3 +39,6 @@ rust-gui:
 
 rust-smoke:
     cargo run --locked --bin ForeverFishing-Rust -- --smoke-test checks/rust-gui.json
+
+upstream-check:
+    uv run python scripts/check_upstream.py --fail-on-changes

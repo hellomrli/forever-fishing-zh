@@ -342,6 +342,34 @@ impl Matcher {
         Ok(best)
     }
 
+    /// Compare the same-sized candidate against the frame taken before the cast.
+    pub fn was_present(
+        &mut self,
+        before: &Frame,
+        candidate: IconMatch,
+        threshold: f32,
+        cancel: &Cancel,
+    ) -> Result<bool> {
+        let (width, height) = before.dimensions();
+        if width == 0 || height == 0 {
+            return Ok(false);
+        }
+        let region = Region::around(
+            candidate.x,
+            candidate.y,
+            width,
+            height,
+            candidate.size.max(12) * 2,
+        );
+        let previous = self.find(before, candidate.size, region, cancel)?;
+        Ok(previous.accepted(threshold)
+            && previous
+                .x
+                .abs_diff(candidate.x)
+                .max(previous.y.abs_diff(candidate.y))
+                <= candidate.size)
+    }
+
     pub fn calibrate(
         &mut self,
         frame: &Frame,
@@ -506,6 +534,22 @@ mod tests {
             assert!(found.accepted(0.99), "{size}: {found:?}");
             assert!(found.x.abs_diff(80 + size / 2) <= 1 && found.y.abs_diff(60 + size / 2) <= 1);
         }
+    }
+
+    #[test]
+    fn precast_check_rejects_an_existing_gear_and_accepts_a_new_location() {
+        let cancel = Cancel::default();
+        let mut matcher = Matcher::new(1920).unwrap();
+        let before = scene(29, 70, 60);
+        let old = matcher
+            .find(&before, 29, Region::default(), &cancel)
+            .unwrap();
+        assert!(matcher.was_present(&before, old, 0.75, &cancel).unwrap());
+        let after = scene(29, 220, 140);
+        let new = matcher
+            .find(&after, 29, Region::default(), &cancel)
+            .unwrap();
+        assert!(!matcher.was_present(&before, new, 0.75, &cancel).unwrap());
     }
 
     #[test]
