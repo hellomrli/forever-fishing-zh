@@ -5,10 +5,19 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::{Mutex, MutexGuard},
     thread,
     time::{Duration, Instant},
 };
 use toml_edit::{DocumentMut, Item, Table};
+
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+struct ConfigLock {
+    // Close the file before allowing the next writer through the process mutex.
+    _file: File,
+    _process: MutexGuard<'static, ()>,
+}
 
 macro_rules! settings {
     ($name:ident { $($field:ident: $ty:ty = $default:expr),* $(,)? }) => {
@@ -245,7 +254,10 @@ impl Store {
         Self { path }
     }
 
-    fn lock(&self) -> Result<File> {
+    fn lock(&self) -> Result<ConfigLock> {
+        // Local writers queue before starting the cross-process timeout. On Windows,
+        // several fsync-heavy saves can otherwise starve another local writer for 5 s.
+        let process = WRITE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
         fs::create_dir_all(parent_directory(&self.path))?;
         let mut name = self.path.as_os_str().to_os_string();
         name.push(".lock");
@@ -258,7 +270,12 @@ impl Store {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             match file.try_lock_exclusive() {
-                Ok(()) => return Ok(file),
+                Ok(()) => {
+                    return Ok(ConfigLock {
+                        _file: file,
+                        _process: process,
+                    })
+                }
                 // Windows lock contention uses ERROR_LOCK_VIOLATION rather than WouldBlock.
                 Err(error)
                     if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
@@ -436,8 +453,9 @@ mod tests {
         store.ensure().unwrap();
         let threads: Vec<_> = (0..8)
             .map(|_| {
-                let store = store.clone();
+                let path = store.path.clone();
                 thread::spawn(move || {
+                    let store = Store::new(path);
                     for _ in 0..10 {
                         store.update(|c| c.game.session_minutes += 1).unwrap();
                     }
