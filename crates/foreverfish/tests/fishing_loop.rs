@@ -105,7 +105,155 @@ fn landing_wait_starts_after_actual_delivery_even_with_a_short_configured_timeou
 }
 
 #[test]
-fn present_gear_waits_until_the_no_sound_deadline_and_reeling_restarts_it() {
+fn reeling_continues_after_pickup_even_with_a_lingering_gear_or_old_pause() {
+    for gear_lingers in [false, true] {
+        for pause in [0.5, 60.0] {
+            let mut config = Config::default();
+            config.run.pause_min_s = pause;
+            config.run.pause_max_s = if pause == 0.5 { 2.0 } else { pause };
+            let mut engine = Engine::with_seed(config, 7);
+            engine.tick(0.0, seen());
+            assert_eq!(
+                presses(&engine.tick(
+                    5.0,
+                    Observation {
+                        bite: Some(bite()),
+                        ..seen()
+                    }
+                )),
+                ["f"]
+            );
+            let observed = if gear_lingers { seen() } else { absent() };
+            for now in [5.02, 5.25, 5.49] {
+                assert!(presses(&engine.tick(now, observed.clone())).is_empty());
+            }
+            assert_eq!(presses(&engine.tick(5.5, observed.clone())), ["1"]);
+            assert_eq!(engine.state, State::Casting);
+            assert_eq!(engine.stats.catches, u64::from(!gear_lingers));
+            assert_eq!(engine.stats.misses, 0);
+            assert!(presses(&engine.tick(5.52, observed)).is_empty());
+            assert_eq!(engine.stats.casts, 1);
+        }
+    }
+}
+
+#[test]
+fn pickup_wait_starts_after_actual_interact_key_delivery() {
+    let mut engine = waiting();
+    engine.tick(
+        5.0,
+        Observation {
+            bite: Some(bite()),
+            ..seen()
+        },
+    );
+    engine.key_pressed(5.4);
+    assert!(engine.wants_vision(5.89));
+    assert!(presses(&engine.tick(5.89, seen())).is_empty());
+    assert!(!engine.wants_vision(5.91));
+    assert_eq!(presses(&engine.tick(5.91, Observation::default())), ["1"]);
+    assert_eq!(engine.stats.misses, 0);
+}
+
+#[test]
+fn duplicate_sounds_during_pickup_cannot_delay_the_next_cast() {
+    let mut engine = waiting();
+    let observed = Observation {
+        bite: Some(bite()),
+        ..seen()
+    };
+    assert_eq!(presses(&engine.tick(5.0, observed.clone())), ["f"]);
+    for now in [5.2, 5.4] {
+        assert!(presses(&engine.tick(now, observed.clone())).is_empty());
+    }
+    assert_eq!(presses(&engine.tick(5.5, observed)), ["1"]);
+    assert_eq!(engine.stats.bites, 1);
+    assert_eq!(engine.stats.misses, 0);
+}
+
+#[test]
+fn pickup_wait_obeys_interruptions_and_resume_rechecks_presence() {
+    for interruption in ["pause", "focus", "stop"] {
+        let mut engine = waiting();
+        engine.tick(
+            5.0,
+            Observation {
+                bite: Some(bite()),
+                ..seen()
+            },
+        );
+        if interruption == "pause" {
+            engine.toggle_pause();
+        } else if interruption == "stop" {
+            engine.stop();
+        }
+        for now in [5.2, 5.6] {
+            assert!(presses(&engine.tick(
+                now,
+                Observation {
+                    focused: interruption != "focus",
+                    ..seen()
+                }
+            ))
+            .is_empty());
+        }
+        if interruption != "stop" {
+            engine.manual_paused = false;
+            engine.tick(6.0, seen());
+            assert!(presses(&engine.tick(6.1, seen())).is_empty());
+            assert_eq!(engine.state, State::Waiting);
+        }
+    }
+}
+
+#[test]
+fn an_explicit_break_still_happens_between_pickup_and_the_next_cast() {
+    let mut config = Config::default();
+    config.behavior.break_every_min_minutes = 0.05;
+    config.behavior.break_every_max_minutes = 0.05;
+    config.behavior.break_min_minutes = 0.05;
+    config.behavior.break_max_minutes = 0.05;
+    let mut engine = Engine::with_seed(config, 7);
+    engine.tick(0.0, seen());
+    engine.tick(
+        5.0,
+        Observation {
+            bite: Some(bite()),
+            ..seen()
+        },
+    );
+    assert!(presses(&engine.tick(5.5, seen())).is_empty());
+    assert_eq!(engine.state, State::Resting);
+    assert!(presses(&engine.tick(8.49, seen())).is_empty());
+    engine.tick(8.5, Observation::default());
+    assert!(!engine.wants_vision(8.52));
+    assert_eq!(presses(&engine.tick(8.52, Observation::default())), ["1"]);
+    assert_eq!(engine.stats.misses, 0);
+}
+
+#[test]
+fn a_due_lure_is_applied_after_pickup_without_waiting_for_the_old_gear() {
+    let mut engine = waiting();
+    engine.cfg.game.lure_key = "2".into();
+    engine.tick(
+        5.0,
+        Observation {
+            bite: Some(bite()),
+            ..seen()
+        },
+    );
+    assert_eq!(presses(&engine.tick(5.5, seen())), ["2"]);
+    assert_eq!(engine.state, State::Lure);
+    engine.key_pressed(5.7);
+    assert!(presses(&engine.tick(11.69, seen())).is_empty());
+    engine.tick(11.71, seen());
+    assert_eq!(presses(&engine.tick(11.73, Observation::default())), ["1"]);
+    assert_eq!(engine.state, State::Casting);
+    assert_eq!(engine.stats.misses, 0);
+}
+
+#[test]
+fn present_gear_waits_until_a_bite_and_the_next_cast_starts_its_own_sound_timer() {
     let mut engine = waiting();
     for now in [10.0, 20.0, 29.0] {
         assert!(presses(&engine.tick(now, seen())).is_empty());
@@ -120,25 +268,18 @@ fn present_gear_waits_until_the_no_sound_deadline_and_reeling_restarts_it() {
     );
     assert_eq!(presses(&actions), ["f"]);
     assert_eq!(engine.state, State::Looting);
-    assert!(presses(&engine.tick(59.0, seen())).is_empty());
+    assert!(presses(&engine.tick(30.49, seen())).is_empty());
     assert_eq!(engine.state, State::Looting);
-    assert_eq!(engine.stats.casts, 1);
+    assert_eq!(presses(&engine.tick(30.5, seen())), ["1"]);
+    engine.key_pressed(30.9);
+    engine.tick(32.4, seen());
+    assert_eq!(engine.stats.casts, 2);
     assert_eq!(engine.stats.catches, 0);
     assert_eq!(engine.stats.misses, 0);
-    assert_eq!(
-        presses(&engine.tick(
-            59.1,
-            Observation {
-                bite: Some(bite()),
-                ..seen()
-            }
-        )),
-        ["f"]
-    );
-    assert!(presses(&engine.tick(89.0, seen())).is_empty());
-    assert_eq!(presses(&engine.tick(89.1, seen())), ["1"]);
+    assert!(presses(&engine.tick(60.89, seen())).is_empty());
+    assert_eq!(presses(&engine.tick(60.91, seen())), ["1"]);
     assert_eq!(engine.stats.misses, 1);
-    assert_eq!(engine.stats.casts, 2);
+    assert_eq!(engine.stats.casts, 3);
 }
 
 #[test]
@@ -161,39 +302,44 @@ fn sound_wins_over_sustained_icon_loss_on_the_same_tick() {
 }
 
 #[test]
-fn only_fresh_sustained_absence_ends_a_cast_and_each_reel_counts_once() {
-    for reeled in [false, true] {
-        let mut engine = waiting();
-        if reeled {
-            engine.tick(
-                2.0,
-                Observation {
-                    bite: Some(bite()),
-                    ..seen()
-                },
-            );
-        }
-        for now in [3.0, 3.25, 3.5] {
-            engine.tick(now, absent());
-        }
-        assert_eq!(engine.stats.catches, 0);
-        assert_eq!(engine.stats.misses, 0);
-        // A tick without a screenshot must not count an unverified disappearance.
-        engine.tick(3.75, Observation::default());
-        assert_eq!(engine.stats.catches, 0);
-        assert_eq!(engine.stats.misses, 0);
-        engine.tick(4.0, seen());
-        for now in [5.0, 5.25, 5.5, 5.75, 6.0] {
-            engine.tick(now, absent());
-        }
-        assert_eq!(engine.state, State::Resting);
-        assert_eq!(engine.stats.catches, u64::from(reeled));
-        assert_eq!(engine.stats.misses, u64::from(!reeled));
-        engine.tick(6.1, absent());
-        assert_eq!(presses(&engine.tick(6.2, absent())), ["1"]);
-        assert_eq!(engine.stats.casts, 2);
-        assert_eq!(engine.stats.catches, u64::from(reeled));
+fn only_fresh_sustained_absence_before_a_bite_ends_a_cast() {
+    let mut engine = waiting();
+    for now in [3.0, 3.25, 3.5] {
+        engine.tick(now, absent());
     }
+    assert_eq!(engine.stats.catches, 0);
+    assert_eq!(engine.stats.misses, 0);
+    // A tick without a screenshot must not count an unverified disappearance.
+    engine.tick(3.75, Observation::default());
+    assert_eq!(engine.stats.catches, 0);
+    assert_eq!(engine.stats.misses, 0);
+    engine.tick(4.0, seen());
+    for now in [5.0, 5.25, 5.5, 5.75, 6.0] {
+        engine.tick(now, absent());
+    }
+    assert_eq!(engine.state, State::Resting);
+    assert_eq!(engine.stats.catches, 0);
+    assert_eq!(engine.stats.misses, 1);
+    engine.tick(6.1, absent());
+    assert_eq!(presses(&engine.tick(6.2, absent())), ["1"]);
+    assert_eq!(engine.stats.casts, 2);
+}
+
+#[test]
+fn one_missing_frame_during_pickup_does_not_count_a_catch_or_delay_recasting() {
+    let mut engine = waiting();
+    engine.tick(
+        5.0,
+        Observation {
+            bite: Some(bite()),
+            ..seen()
+        },
+    );
+    engine.tick(5.02, absent());
+    engine.tick(5.27, seen());
+    assert_eq!(presses(&engine.tick(5.5, Observation::default())), ["1"]);
+    assert_eq!(engine.stats.catches, 0);
+    assert_eq!(engine.stats.misses, 0);
 }
 
 #[test]
@@ -273,7 +419,7 @@ fn resize_preserves_the_cast_and_rechecks_the_gear() {
 }
 
 #[test]
-fn session_quit_waits_until_the_current_gear_disappears() {
+fn session_quit_waits_for_pickup_and_never_starts_another_cast() {
     let mut engine = engine();
     engine.cfg.game.session_minutes = 1;
     engine.cfg.game.quit_key = "3".into();
@@ -291,11 +437,11 @@ fn session_quit_waits_until_the_current_gear_disappears() {
         )),
         ["f"]
     );
-    for now in [60.2, 60.45, 60.7, 60.95, 61.2] {
-        engine.tick(now, absent());
+    for now in [60.2, 60.45, 60.61] {
+        assert!(presses(&engine.tick(now, seen())).is_empty());
     }
     assert_eq!(engine.state, State::Resting);
-    assert_eq!(presses(&engine.tick(61.3, absent())), ["3"]);
+    assert_eq!(presses(&engine.tick(60.7, seen())), ["3"]);
     assert_eq!(engine.state, State::Quitting);
 }
 
@@ -347,13 +493,17 @@ fn legacy_visual_timing_and_skip_values_do_not_block_bundled_sounds() {
                 },
             );
             let pressed = presses(&actions);
-            assert_eq!(pressed, if detected { vec!["f"] } else { vec![] });
+            if detected {
+                assert_eq!(pressed, ["f"]);
+            } else {
+                assert!(pressed.iter().all(|key| *key == "1"));
+            }
             keys.extend(pressed.into_iter().map(str::to_owned));
         }
         assert_eq!(heard, 1, "{clip}");
-        assert_eq!(keys, ["f"]);
-        assert_eq!(engine.state, State::Looting);
-        assert_eq!(engine.stats.casts, 0);
+        assert_eq!(keys, ["f", "1"]);
+        assert_eq!(engine.state, State::Waiting);
+        assert_eq!(engine.stats.casts, 1);
         assert_eq!(engine.stats.catches, 0);
     }
 }
@@ -395,33 +545,20 @@ fn no_sound_deadline_applies_while_still_seeking_the_first_gear() {
 
 #[test]
 fn no_sound_deadline_overrides_icon_loss_when_a_capture_finishes_late() {
-    for reeled in [false, true] {
-        let mut engine = waiting();
-        engine.cfg.run.pause_min_s = 2.0;
-        engine.cfg.run.pause_max_s = 2.0;
-        let deadline = if reeled {
-            engine.tick(
-                2.0,
-                Observation {
-                    bite: Some(bite()),
-                    ..seen()
-                },
-            );
-            32.0
-        } else {
-            30.0
-        };
-        for offset in [1.0, 0.75, 0.5, 0.25] {
-            assert!(presses(&engine.tick(deadline - offset, absent())).is_empty());
-        }
-        // The scan began before the deadline; its absent result arrives after it.
-        assert!(engine.wants_vision(deadline - 0.01));
-        assert_eq!(presses(&engine.tick(deadline + 0.02, absent())), ["1"]);
-        assert_eq!(engine.state, State::Casting);
-        assert_eq!(engine.stats.casts, 2);
-        assert_eq!(engine.stats.misses, 1);
-        assert_eq!(engine.stats.catches, 0);
+    let mut engine = waiting();
+    engine.cfg.run.pause_min_s = 2.0;
+    engine.cfg.run.pause_max_s = 2.0;
+    let deadline = 30.0;
+    for offset in [1.0, 0.75, 0.5, 0.25] {
+        assert!(presses(&engine.tick(deadline - offset, absent())).is_empty());
     }
+    // The scan began before the deadline; its absent result arrives after it.
+    assert!(engine.wants_vision(deadline - 0.01));
+    assert_eq!(presses(&engine.tick(deadline + 0.02, absent())), ["1"]);
+    assert_eq!(engine.state, State::Casting);
+    assert_eq!(engine.stats.casts, 2);
+    assert_eq!(engine.stats.misses, 1);
+    assert_eq!(engine.stats.catches, 0);
 }
 
 #[test]

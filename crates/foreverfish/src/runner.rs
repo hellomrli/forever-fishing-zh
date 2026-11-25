@@ -683,10 +683,7 @@ fn fish(
             heard = None;
         }
         for samples in batch.packets {
-            if matches!(engine.state, State::Waiting | State::Looting)
-                && !engine.manual_paused
-                && observed.focused
-            {
+            if engine.state == State::Waiting && !engine.manual_paused && observed.focused {
                 let result = detector.feed(&samples, cancel)?;
                 observed.bite = result.bites.first().cloned().or(observed.bite);
                 for frame in &result.frames {

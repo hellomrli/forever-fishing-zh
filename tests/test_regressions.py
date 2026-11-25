@@ -265,14 +265,10 @@ def test_one_missing_frame_is_not_a_catch_and_recovery_resets_confirmation():
     io.score = 0.9
     e.step()
     assert e._misses == 0 and e._disappeared_since is None
-    io.score = 0.0
-    for _ in range(4):
-        io.t += 0.26
-        e.step()
-        assert e.stats.catches == 0
-    io.t += 0.26
+    io.t = 0.5
     e.step()
-    assert e.stats.catches == 1 and e.state is State.IDLE
+    assert e.stats.catches == 0 and e.state is State.CASTING
+    assert io.pressed == ["1"], "A brief flicker affects neither counting nor continuous fishing"
 
 
 def test_saved_audio_and_manual_calibration_preserve_fresh_config():

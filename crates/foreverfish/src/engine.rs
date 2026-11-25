@@ -24,7 +24,7 @@ impl State {
             Self::Jump => "等待落地",
             Self::Casting => "寻找金色齿轮",
             Self::Waiting => "等待咬钩声音",
-            Self::Looting => "起杆后继续监听",
+            Self::Looting => "完成拾取后继续抛竿",
             Self::Resting => "休息等待",
             Self::Paused => "已暂停",
             Self::Quitting => "等待退出游戏",
@@ -65,6 +65,7 @@ pub struct Observation {
 /// Ignore brief icon flicker; a fresh observation must confirm the sustained absence.
 const ICON_LOST_S: f64 = 1.0; // Let the 0.8 s sound fingerprint arrive before recasting.
 pub const MEASURE_AFTER_S: f64 = 1.5;
+const PICKUP_WAIT_S: f64 = 0.5;
 
 impl Default for Observation {
     fn default() -> Self {
@@ -98,6 +99,7 @@ pub struct Engine {
     next_break: Option<f64>,
     quit_tries: u32,
     stopping: bool,
+    recast_pending: bool,
 }
 
 impl Engine {
@@ -123,6 +125,7 @@ impl Engine {
             next_break: None,
             quit_tries: 0,
             stopping: false,
+            recast_pending: false,
         }
     }
     pub fn toggle_pause(&mut self) {
@@ -137,8 +140,9 @@ impl Engine {
                 now - self.cast_at >= MEASURE_AFTER_S
                     && now < self.listen_at + self.cfg.run.cast_timeout_s
             }
-            State::Idle => true,
-            State::Waiting | State::Looting => now < self.listen_at + self.cfg.run.cast_timeout_s,
+            State::Idle => !self.recast_pending,
+            State::Waiting => now < self.listen_at + self.cfg.run.cast_timeout_s,
+            State::Looting => now < self.deadline,
             _ => false,
         }
     }
@@ -149,7 +153,7 @@ impl Engine {
                 self.cast_at = now;
                 self.listen_at = now;
             }
-            State::Looting => self.listen_at = now,
+            State::Looting => self.deadline = now + PICKUP_WAIT_S,
             State::Lure | State::Jump | State::Quitting => {
                 self.deadline += (now - self.tick_at).max(0.0);
             }
@@ -166,6 +170,7 @@ impl Engine {
             }
             self.state = State::Paused;
             self.icon = None;
+            self.recast_pending = false;
             actions.push(Action::Message(
                 "按键发送前游戏失去焦点或已暂停；继续后先检查齿轮".into(),
             ));
@@ -230,6 +235,7 @@ impl Engine {
             }
             if self.state != State::Paused {
                 self.state = State::Paused;
+                self.recast_pending = false;
                 actions.push(Action::Message(
                     if self.manual_paused {
                         "手动暂停；继续后先检查齿轮"
@@ -258,32 +264,16 @@ impl Engine {
         }
         match self.state {
             State::Idle => {
-                let Some(icon) = observed.icon else {
-                    return actions; // No screenshot yet: absence has not been established.
-                };
-                if icon.accepted(self.cfg.vision.icon_threshold) {
-                    self.found(now, icon, &mut actions);
-                } else if !self.cfg.game.lure_key.trim().is_empty()
-                    && self
-                        .lure_at
-                        .is_none_or(|at| now - at >= self.cfg.game.lure_minutes * 60.0)
-                {
-                    let key = self.cfg.game.lure_key.clone();
-                    self.press(key, &mut actions);
-                    self.state = State::Lure;
-                    self.deadline = now + self.cfg.run.lure_cast_s;
-                    actions.push(Action::Message(format!(
-                        "正在补饵，等待 {:.1} 秒",
-                        self.cfg.run.lure_cast_s
-                    )));
-                } else if self.chance(self.cfg.behavior.jump_chance) {
-                    let key = self.cfg.behavior.jump_key.clone();
-                    self.press(key, &mut actions);
-                    self.state = State::Jump;
-                    self.deadline = now + self.uniform(1.0, 1.5);
-                } else {
-                    self.cast(now, &mut actions);
+                if !self.recast_pending {
+                    let Some(icon) = observed.icon else {
+                        return actions; // No screenshot yet: absence has not been established.
+                    };
+                    if icon.accepted(self.cfg.vision.icon_threshold) {
+                        self.found(now, icon, &mut actions);
+                        return actions;
+                    }
                 }
+                self.prepare_cast(now, &mut actions);
             }
             State::Lure if now >= self.deadline => {
                 self.lure_at = Some(now);
@@ -308,17 +298,17 @@ impl Engine {
                     }
                 }
             }
-            State::Waiting | State::Looting => {
+            State::Waiting => {
                 if let Some(bite) = observed.bite {
                     self.stats.bites += 1;
                     let key = self.cfg.game.interact_key.clone();
                     self.press(key.clone(), &mut actions);
                     self.state = State::Looting;
-                    self.listen_at = now;
+                    self.deadline = now + PICKUP_WAIT_S;
                     self.misses = 0;
                     self.disappeared = None;
                     actions.push(Action::Message(format!(
-                        "听到咬钩声音 {}（{:.2}），立即按 {key} 起杆；齿轮存在时继续监听",
+                        "听到咬钩声音 {}（{:.2}），立即按 {key} 起杆；{PICKUP_WAIT_S} 秒后继续抛竿",
                         bite.clip, bite.score,
                     )));
                     return actions; // Sound wins over a missing icon in the same tick.
@@ -339,13 +329,31 @@ impl Engine {
                     if self.misses >= 3
                         && self.disappeared.is_some_and(|at| now - at >= ICON_LOST_S)
                     {
-                        if self.state == State::Looting {
-                            self.stats.catches += 1;
-                            self.rest(now, &mut actions);
-                            actions.push(Action::Message("齿轮持续消失，估计收杆 +1".into()));
-                        } else {
-                            self.miss(now, "金色齿轮持续消失，准备下一竿", &mut actions);
-                        }
+                        self.miss(now, "金色齿轮持续消失，准备下一竿", &mut actions);
+                    }
+                }
+            }
+            State::Looting => {
+                // Presence only informs the estimated catch count. The old gear and
+                // duplicate sounds cannot restart the bite timer after a reel.
+                if let Some(icon) = observed.icon {
+                    if icon.accepted(self.cfg.vision.icon_threshold) {
+                        self.misses = 0;
+                        self.disappeared = None;
+                    } else {
+                        self.misses += 1;
+                        self.disappeared.get_or_insert(now);
+                    }
+                }
+                if now >= self.deadline {
+                    if self.misses >= 2 && self.disappeared.is_some() {
+                        self.stats.catches += 1;
+                        actions.push(Action::Message("已观察到齿轮消失，估计收杆 +1".into()));
+                    }
+                    self.recast_pending = true;
+                    self.rest(now, 0.0, &mut actions);
+                    if now >= self.deadline && !time_up {
+                        self.prepare_cast(now, &mut actions);
                     }
                 }
             }
@@ -386,7 +394,31 @@ impl Engine {
         let hold = (self.cfg.run.key_hold_ms as f64 + self.uniform(-jitter, jitter)).round() as u32;
         actions.push(Action::Press { key, hold_ms: hold });
     }
+    fn prepare_cast(&mut self, now: f64, actions: &mut Vec<Action>) {
+        if !self.cfg.game.lure_key.trim().is_empty()
+            && self
+                .lure_at
+                .is_none_or(|at| now - at >= self.cfg.game.lure_minutes * 60.0)
+        {
+            let key = self.cfg.game.lure_key.clone();
+            self.press(key, actions);
+            self.state = State::Lure;
+            self.deadline = now + self.cfg.run.lure_cast_s;
+            actions.push(Action::Message(format!(
+                "正在补饵，等待 {:.1} 秒",
+                self.cfg.run.lure_cast_s
+            )));
+        } else if self.chance(self.cfg.behavior.jump_chance) {
+            let key = self.cfg.behavior.jump_key.clone();
+            self.press(key, actions);
+            self.state = State::Jump;
+            self.deadline = now + self.uniform(1.0, 1.5);
+        } else {
+            self.cast(now, actions);
+        }
+    }
     fn cast(&mut self, now: f64, actions: &mut Vec<Action>) {
+        self.recast_pending = false;
         self.icon = None;
         self.disappeared = None;
         self.misses = 0;
@@ -415,11 +447,11 @@ impl Engine {
     }
     fn miss(&mut self, now: f64, message: &str, actions: &mut Vec<Action>) {
         self.stats.misses += 1;
-        self.rest(now, actions);
+        let wait = self.uniform(self.cfg.run.pause_min_s, self.cfg.run.pause_max_s);
+        self.rest(now, wait, actions);
         actions.push(Action::Message(message.into()));
     }
-    fn rest(&mut self, now: f64, actions: &mut Vec<Action>) {
-        let mut wait = self.uniform(self.cfg.run.pause_min_s, self.cfg.run.pause_max_s);
+    fn rest(&mut self, now: f64, mut wait: f64, actions: &mut Vec<Action>) {
         if self.next_break.is_some_and(|at| now >= at) {
             wait += self.uniform(
                 self.cfg.behavior.break_min_minutes,

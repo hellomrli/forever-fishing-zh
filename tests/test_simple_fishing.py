@@ -12,7 +12,15 @@ from wowfish.assets import CLIP_NAMES
 from wowfish.audio.clips import load_reference_clips
 from wowfish.audio.detector import BiteDetector, BiteEvent
 from wowfish.capture import WindowRef
-from wowfish.config import AudioConfig, Config, GameConfig, RunConfig, VisionConfig, load_config
+from wowfish.config import (
+    AudioConfig,
+    BehaviorConfig,
+    Config,
+    GameConfig,
+    RunConfig,
+    VisionConfig,
+    load_config,
+)
 from wowfish.engine.engine import FishingEngine
 from wowfish.engine.state import State
 from wowfish.vision.calibrate import Calibration
@@ -129,6 +137,149 @@ def test_existing_and_moving_gears_wait_until_the_no_sound_deadline():
     assert engine.state is State.CASTING and engine.stats.misses == engine.stats.casts == 1
 
 
+@pytest.mark.parametrize("gear_lingers", [False, True])
+@pytest.mark.parametrize("pause_s", [None, 60.0])
+def test_reeling_continues_after_pickup_even_with_a_lingering_gear_or_old_pause(
+    gear_lingers, pause_s
+):
+    pond = Pond()
+    pond.icon()
+    run = RunConfig() if pause_s is None else RunConfig(pause_min_s=pause_s, pause_max_s=pause_s)
+    engine = fishing(
+        pond, cfg=Config(GameConfig(), VisionConfig(icon_size_px=29), AudioConfig(), run)
+    )
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    if not gear_lingers:
+        pond.frame = pond.water.copy()
+    for at in (5.02, 5.25, 5.49):
+        step_at(engine, pond, at)
+        assert pond.pressed == [(5.0, "f")], "Allow the game to finish picking up the fish"
+    step_at(engine, pond, 5.5)
+    assert pond.pressed == [(5.0, "f"), (5.5, "1")]
+    assert engine.state is State.CASTING
+    assert engine.stats.catches == int(not gear_lingers) and engine.stats.misses == 0
+    step_at(engine, pond, 5.52)
+    assert engine.stats.casts == 1, "Complete each reel only once"
+
+
+def test_pickup_wait_starts_after_the_interact_key_finishes_sending():
+    pond = Pond()
+    pond.icon()
+    original_press = pond.press_key
+
+    def delayed_press(key, hold):
+        original_press(key, hold)
+        pond.t += 0.4
+
+    pond.press_key = delayed_press
+    engine = fishing(pond)
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    step_at(engine, pond, 5.89)
+    assert pond.pressed == [(5.0, "f")]
+    step_at(engine, pond, 5.91)
+    assert pond.pressed == [(5.0, "f"), (5.91, "1")]
+    assert engine.stats.misses == 0
+
+
+def test_pickup_deadline_does_not_wait_for_another_screenshot():
+    pond = Pond()
+    pond.icon()
+    engine = fishing(pond)
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+
+    def no_more_captures(*_args):
+        pytest.fail("The pickup deadline must deliver the next cast without another scan")
+
+    pond.grab = no_more_captures
+    step_at(engine, pond, 5.5)
+    assert pond.pressed == [(5.0, "f"), (5.5, "1")]
+    assert engine.stats.misses == engine.stats.catches == 0
+
+
+def test_duplicate_sounds_during_pickup_cannot_delay_the_next_cast():
+    pond = Pond()
+    pond.icon()
+    engine = fishing(pond)
+    engine.step()
+    pond.t = 5.0
+    sound = BiteEvent("fishbite", 0.9, 4.0)
+    engine._wait_bite(pond.t, [sound])
+    pond.feed = lambda _chunk: [sound]
+    for at in (5.2, 5.4, 5.5):
+        pond.pending = np.zeros(1024, np.float32)
+        step_at(engine, pond, at)
+    assert pond.pressed == [(5.0, "f"), (5.5, "1")]
+    assert engine.stats.bites_heard == 1 and engine.stats.misses == 0
+
+
+@pytest.mark.parametrize("interruption", ["pause", "focus", "stop"])
+def test_pickup_wait_obeys_interruptions_and_resume_rechecks_presence(interruption):
+    pond = Pond()
+    pond.icon()
+    engine = fishing(pond)
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    if interruption == "pause":
+        engine.pause()
+    elif interruption == "focus":
+        pond.focused = False
+    else:
+        engine.stop()
+    step_at(engine, pond, 5.2)
+    step_at(engine, pond, 5.6)
+    assert pond.pressed == [(5.0, "f")]
+    if interruption != "stop":
+        pond.focused = True
+        engine.resume()
+        step_at(engine, pond, 6.0)
+        assert engine.state is State.WAIT_BITE and pond.pressed == [(5.0, "f")]
+
+
+def test_an_explicit_break_still_happens_between_pickup_and_the_next_cast():
+    pond = Pond()
+    pond.icon()
+    cfg = Config(
+        GameConfig(),
+        VisionConfig(icon_size_px=29),
+        AudioConfig(),
+        behavior=BehaviorConfig(
+            break_every_min_minutes=0.05,
+            break_every_max_minutes=0.05,
+            break_min_minutes=0.05,
+            break_max_minutes=0.05,
+        ),
+    )
+    engine = fishing(pond, cfg=cfg)
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    step_at(engine, pond, 5.5)
+    assert pond.pressed == [(5.0, "f"), (8.5, "1")]
+    assert engine.state is State.CASTING and engine.stats.misses == 0
+
+
+def test_a_due_lure_is_applied_after_pickup_without_waiting_for_the_old_gear():
+    pond = Pond()
+    pond.icon()
+    cfg = Config(GameConfig(lure_key="2"), VisionConfig(icon_size_px=29), AudioConfig())
+    engine = fishing(pond, cfg=cfg)
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    step_at(engine, pond, 5.5)
+    assert pond.pressed == [(5.0, "f"), (5.5, "2")]
+    step_at(engine, pond, 11.52)
+    assert pond.pressed[-1] == (11.52, "1")
+    assert engine.state is State.CASTING and engine.stats.misses == 0
+
+
 @pytest.mark.parametrize("clip", CLIP_NAMES)
 def test_bundled_sound_reels_on_the_detection_tick_with_an_unchanged_picture(clip):
     from wowfish.audio.clips import build_fingerprints
@@ -152,37 +303,36 @@ def test_bundled_sound_reels_on_the_detection_tick_with_an_unchanged_picture(cli
         pond.pending = signal[offset : offset + 1024]
         step_at(engine, pond, 5.0 + (offset + len(pond.pending)) / pond.sample_rate)
     assert len(heard) == 1 and heard[0][1].clip == clip
-    assert pond.pressed == [(heard[0][0], "f")], "The matched sound must press the key immediately"
+    assert pond.pressed[0] == (heard[0][0], "f"), "The sound must press the key immediately"
+    assert [key for _, key in pond.pressed] == ["f", "1"]
+    assert 0.5 <= pond.pressed[1][0] - pond.pressed[0][0] < 0.5 + 1024 / pond.sample_rate
     assert heard[0][0] not in pond.captured, "The detection tick must skip image work"
-    assert engine.state is State.INTERACT and engine.stats.catches == engine.stats.casts == 0
+    assert engine.state is State.WAIT_BITE and engine.stats.catches == engine.stats.misses == 0
 
 
-def test_reeling_answers_new_sounds_and_restarts_the_no_sound_timer():
+def test_the_next_cast_starts_its_own_no_sound_timer_after_pickup():
     pond = Pond()
     pond.icon()
     engine = fishing(pond)
     engine.step()
-    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 0.0)])
-    step_at(engine, pond, 20.0)
-    assert engine.state is State.INTERACT and [key for _, key in pond.pressed] == ["f"]
-    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 20.0)])
-    deadline = pond.pressed[-1][0] + 30.0
-    assert [key for _, key in pond.pressed] == ["f", "f"]
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    step_at(engine, pond, 5.5)
+    step_at(engine, pond, 7.0)
+    deadline = 35.5
+    assert [key for _, key in pond.pressed] == ["f", "1"]
     assert engine.stats.catches == engine.stats.misses == 0
-    step_at(engine, pond, 49.0)
-    assert [key for _, key in pond.pressed] == ["f", "f"]
+    step_at(engine, pond, 35.49)
+    assert [key for _, key in pond.pressed] == ["f", "1"]
     step_at(engine, pond, deadline)
     assert pond.pressed[-1] == (deadline, "1") and engine.stats.misses == 1
 
 
-@pytest.mark.parametrize("reeled", [False, True])
-def test_sustained_absence_ends_a_cast_but_brief_flicker_does_not(reeled):
+def test_sustained_absence_before_a_bite_ends_a_cast_but_brief_flicker_does_not():
     pond = Pond()
     pond.icon()
     engine = fishing(pond)
     engine.step()
-    if reeled:
-        engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 0.0)])
     pond.frame = pond.water.copy()
     for at in (2.0, 2.25, 2.5):
         step_at(engine, pond, at)
@@ -193,7 +343,7 @@ def test_sustained_absence_ends_a_cast_but_brief_flicker_does_not(reeled):
     for at in (3.0, 3.25, 3.5, 3.75, 4.0):
         step_at(engine, pond, at)
     assert engine.state is State.IDLE
-    assert engine.stats.catches == int(reeled) and engine.stats.misses == int(not reeled)
+    assert engine.stats.catches == 0 and engine.stats.misses == 1
     step_at(engine, pond, 4.25)
     assert pond.pressed[-1] == (4.25, "1") and engine.stats.casts == 1
 
@@ -313,10 +463,10 @@ def test_a_bite_on_the_no_sound_deadline_reels_instead_of_recasting():
     pond.t = 30.0
     engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 29.0)])
     assert pond.pressed == [(30.0, "f")] and engine.stats.misses == 0
-    step_at(engine, pond, 59.99)
+    step_at(engine, pond, 30.49)
     assert len(pond.pressed) == 1
-    step_at(engine, pond, 60.0)
-    assert pond.pressed[-1] == (60.0, "1")
+    step_at(engine, pond, 30.5)
+    assert pond.pressed[-1] == (30.5, "1") and engine.stats.misses == 0
 
 
 @pytest.mark.parametrize("clip", CLIP_NAMES)

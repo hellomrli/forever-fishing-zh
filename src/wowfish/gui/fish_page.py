@@ -24,7 +24,7 @@ class FishPage:
         self.frame = f = tb.Frame(parent, padding=16)
         wrapped_label(
             f,
-            "齿轮不存在就抛竿，存在就等待；听到声音立即起杆，默认 30 秒无咬钩声音重抛。",
+            "听到咬钩声立即起杆，0.5 秒后继续抛竿；齿轮存在时等待，30 秒无咬钩声重抛。",
             bootstyle="info",
         ).pack(fill="x", pady=(0, 10))
         clients = tb.Frame(f)

@@ -422,7 +422,7 @@ impl App {
             "游戏内开启自动拾取，绑定“与目标互动”，并执行 /console SoftTargetIconGameObject 1。",
         );
         ui.label("齿轮不存在就抛竿，存在就等待；听到咬钩声音立即按拾取键起杆。");
-        ui.small("默认 30 秒没有咬钩声音就重新抛竿，即使金色齿轮仍在。");
+        ui.small("起杆后 0.5 秒继续抛竿；默认 30 秒无咬钩声音就重抛，即使齿轮仍在。");
         ui.small("切出或最小化游戏会自动暂停，恢复后先检查齿轮。");
         ui.separator();
         ui.horizontal_wrapped(|ui| {
@@ -468,7 +468,7 @@ impl App {
             ui.small("找到浮漂后，请保持游戏镜头和缩放不变。");
         }
         self.score_graph(ui);
-        ui.small("收杆计数依据图标连续消失，表示估计值。实际客户端效果可通过校准和录音验证调整。");
+        ui.small("收杆计数依据拾取期间两次观察到齿轮消失，表示估计值。实际效果可通过校准和录音验证调整。");
         self.log_panel(ui);
     }
 
@@ -624,8 +624,8 @@ impl App {
                         ("抛竿后齿轮等待（秒）", &mut self.config.run.icon_timeout_s),
                         ("无咬钩声音重抛（秒）", &mut self.config.run.cast_timeout_s),
                         ("补饵等待（秒）", &mut self.config.run.lure_cast_s),
-                        ("抛竿间隔下限（秒）", &mut self.config.run.pause_min_s),
-                        ("抛竿间隔上限（秒）", &mut self.config.run.pause_max_s),
+                        ("漏检重试间隔下限（秒）", &mut self.config.run.pause_min_s),
+                        ("漏检重试间隔上限（秒）", &mut self.config.run.pause_max_s),
                     ] {
                         ui.label(label);
                         ui.add(egui::DragValue::new(value).range(0.0..=600.0).speed(0.1));

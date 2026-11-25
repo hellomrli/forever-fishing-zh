@@ -61,7 +61,7 @@ class SetupPage:
         wrapped_label(
             vision,
             "金色齿轮不存在时抛竿，存在时等待；识别到咬钩声音立即按拾取 / 起杆键。"
-            "默认 30 秒没有咬钩声音就重新抛竿。"
+            "起杆后等待 0.5 秒完成拾取，接着抛竿；默认 30 秒没有咬钩声音就重新抛竿。"
             "图标阈值越高，要求齿轮匹配越准确。识别范围、图标校准和声音阈值可在诊断页调整。",
             bootstyle="secondary",
         ).grid(row=2, column=0, columnspan=4, sticky="ew", pady=10)

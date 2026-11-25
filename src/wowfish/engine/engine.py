@@ -46,11 +46,12 @@ SLEEP_SLICE_S = 0.1
 JUMP_LANDING_S = (1.0, 1.5)  # Fishing cannot be cast mid-air; wait this long after a jump
 MEASURE_AFTER_S = 1.5  # Let the bobber land before matching or measuring its gear.
 ICON_LOST_S = 1.0  # Allow the 0.8 s audio fingerprint to arrive before acting on icon flicker.
+PICKUP_WAIT_S = 0.5  # Let auto-loot finish before sending the next cast.
 CALIBRATE_EVERY_S = 1.0
 QUIT_WAIT_S = 30.0  # away from an inn, /quit counts down 20 s before the game closes
 QUIT_TRIES = 3  # quit key presses before giving up on closing the game
 BUSY = (State.CASTING, State.WAIT_BITE, State.INTERACT)  # a cast in hand
-LISTENING = (State.WAIT_BITE, State.INTERACT)
+LISTENING = (State.WAIT_BITE,)
 
 
 class FishingEngine:
@@ -126,6 +127,7 @@ class FishingEngine:
         self._audio_stable_since: float | None = None
         self._last_acquire = -math.inf
         self._last_calibrate = -math.inf
+        self._recast_pending = False
 
     # -- public ------------------------------------------------------------------------------
 
@@ -209,6 +211,7 @@ class FishingEngine:
             if self.state is not State.PAUSED:
                 self.state = State.PAUSED
                 self._icon_xy = None
+                self._recast_pending = False
                 self.detector.reset()
                 reason = msg("user_pause") if self._user_paused.is_set() else UNFOCUSED
                 self._emit(ev.Paused(self._t(), reason))
@@ -239,11 +242,13 @@ class FishingEngine:
             self._acquire(now)
         elif self.state in LISTENING:
             self._wait_bite(now, bites)
+        elif self.state is State.INTERACT:
+            self._after_reel(now)
         self._maybe_stats(now)
 
     def _cast(self, now: float) -> None:
-        # Starting, resuming, and finishing a rest all recheck presence before any cast key.
-        if self._check_icon(now):
+        # Starting and resuming preserve an existing cast; after pickup the next cast is due.
+        if not self._recast_pending and self._check_icon(now):
             return
         if self._lure_due(now):
             self._apply_lure()
@@ -253,7 +258,7 @@ class FishingEngine:
             if not self._wait(self._rng.uniform(*JUMP_LANDING_S), watch_focus=True):
                 return
             now = self._clock()
-            if self._check_icon(now):
+            if not self._recast_pending and self._check_icon(now):
                 return
         self._send_cast()
 
@@ -265,6 +270,7 @@ class FishingEngine:
             clear()
         if not self._press(key, "cast"):
             return
+        self._recast_pending = False
         self.stats = ev.Stats(
             self._t(), self.stats.casts + 1, self.stats.catches, self.stats.misses,
             self.stats.bites_heard, self._elapsed(),
@@ -369,14 +375,24 @@ class FishingEngine:
             and self._disappeared_since is not None
             and now - self._disappeared_since >= ICON_LOST_S
         ):
-            if self.state is State.INTERACT:
-                self.stats = replace(self.stats, catches=self.stats.catches + 1)
-                self._emit(ev.Caught(self._t()))
-                self._pause_then_idle(msg("caught"))
-            else:
-                self._emit(ev.IconLost(self._t()))
-                self._miss(msg("lost_icon"))
+            self._emit(ev.IconLost(self._t()))
+            self._miss(msg("lost_icon"))
             return
+
+    def _after_reel(self, now: float) -> None:
+        # The old gear and duplicate audio belong to the completed cast. They must not
+        # restart the 30-second bite wait or add an icon-loss/random-pause delay.
+        if self._clock() < self._listen_at + PICKUP_WAIT_S:
+            self._track(now)  # Only used for the estimated catch count, never to gate recasting.
+            return
+        confirmed = self._misses >= 2 and self._disappeared_since is not None
+        if confirmed:
+            self.stats = replace(self.stats, catches=self.stats.catches + 1)
+            self._emit(ev.Caught(self._t()))
+        self._recast_pending = True
+        self._pause_then_idle(msg("caught" if confirmed else "pickup_done"), pause_s=0.0)
+        if self.state is State.IDLE and not self._stop and not self._time_up():
+            self._cast(self._clock())
 
     def _recast_if_no_sound(self) -> bool:
         if self._clock() < self._listen_at + self.cfg.run.cast_timeout_s:
@@ -403,7 +419,7 @@ class FishingEngine:
         self._change(
             State.INTERACT,
             msg("interact", key=key, score=bite.score),
-            msg("loot"),
+            msg("loot", seconds=PICKUP_WAIT_S),
         )
 
     # -- lure --------------------------------------------------------------------------------
@@ -545,8 +561,12 @@ class FishingEngine:
         )  # fmt: skip
         self._pause_then_idle(did)
 
-    def _pause_then_idle(self, did: str) -> None:
-        pause = self._rng.uniform(self.cfg.run.pause_min_s, self.cfg.run.pause_max_s)
+    def _pause_then_idle(self, did: str, *, pause_s: float | None = None) -> None:
+        pause = (
+            self._rng.uniform(self.cfg.run.pause_min_s, self.cfg.run.pause_max_s)
+            if pause_s is None
+            else pause_s
+        )
         rest = self.behavior.break_s(self._clock())
         if rest > 0 and self.session_s != 0:  # a break never outlasts the session
             rest = min(rest, max(0.0, self.session_s - self._elapsed()))
