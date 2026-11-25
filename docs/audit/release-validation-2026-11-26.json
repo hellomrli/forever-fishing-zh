@@ -1,0 +1,143 @@
+{
+  "date": "2026-11-26",
+  "repository": "hellomrli/forever-fishing-zh",
+  "releases": {
+    "python": {
+      "tag": "v1.1.1",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/releases/tag/v1.1.1",
+      "source_commit": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "published_at": "2026-11-25T17:52:37Z",
+      "prerelease": false,
+      "assets": [
+        {
+          "name": "BUILD_INFO.txt",
+          "bytes": 94,
+          "digest": "sha256:f0cbec0099744ebbb50847f463bbbeb65846cde518667bb4f01f94bd531c6598"
+        },
+        {
+          "name": "ForeverFishing-CLI.exe",
+          "bytes": 82219015,
+          "digest": "sha256:2483f880b342bef56639d459f312a3d748145ee100d78f52704a8052caea5235"
+        },
+        {
+          "name": "ForeverFishing-v1.1.1-Windows-x64.zip",
+          "bytes": 163262593,
+          "digest": "sha256:7a97df8701ccae3a582136a4bc9c382b6d6742960bf610207a4681c7b55c98ad"
+        },
+        {
+          "name": "ForeverFishing.exe",
+          "bytes": 82230129,
+          "digest": "sha256:70da8f1d16f367b6e074d041e4351daf3868f45dfc33ec7f5a412047a565564f"
+        },
+        {
+          "name": "SHA256SUMS.txt",
+          "bytes": 363,
+          "digest": "sha256:e5582169c976e0bdd3ab26dd6fe7a4014899dd84e69cd682cefc4554e2120afa"
+        }
+      ],
+      "download_checksums_verified": true,
+      "build_info": "Forever Fishing 1.1.1\nTarget: Windows x64\nCommit: 9c51f0e61d30308f23053a9fefca18d0146b347d\n",
+      "windows_exe_report": "docs/audit/python-v1.1.1-windows-exe.json"
+    },
+    "rust": {
+      "tag": "rust-v2.0.0-alpha.4",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/releases/tag/rust-v2.0.0-alpha.4",
+      "source_commit": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "published_at": "2026-11-25T17:59:51Z",
+      "prerelease": true,
+      "assets": [
+        {
+          "name": "BUILD_INFO.txt",
+          "bytes": 207,
+          "digest": "sha256:7bbb20e3ccbe9b202bd792c08066104b78c4c4ef64f52e356cb0b6616976b9d9"
+        },
+        {
+          "name": "ForeverFishing-Rust-CLI.exe",
+          "bytes": 21539328,
+          "digest": "sha256:4c83e1abc6accb7be73ada56e19303add9b0d5121ffbc64f938f3b11455bd417"
+        },
+        {
+          "name": "ForeverFishing-Rust-v2.0.0-alpha.4-Windows-x64.zip",
+          "bytes": 26365175,
+          "digest": "sha256:4a683682086e936dda4954eed86eab5fa30f918ecfdb249aac0c2400212dd16b"
+        },
+        {
+          "name": "ForeverFishing-Rust.exe",
+          "bytes": 21541376,
+          "digest": "sha256:a30c52aaf414506b04db49ffb002834100f98f4d76e72e0cbc813d97f634e568"
+        },
+        {
+          "name": "SHA256SUMS.txt",
+          "bytes": 386,
+          "digest": "sha256:93b6af00c4a366abb62569fff6360ebdffd09398c66eed59c22e727502ac3d47"
+        }
+      ],
+      "download_checksums_verified": true,
+      "build_info": "version=2.0.0-alpha.4\ncommit=9c51f0e61d30308f23053a9fefca18d0146b347d\nsource_dirty=false\ncompiler=rustc 1.100.0 (0ef1bc386 2026-11-09)\ntarget=x86_64-pc-windows-msvc\npackaged_utc=2026-11-25T17:58:59.8367964Z\n",
+      "windows_exe_report": "docs/audit/rust-v2.0.0-alpha.4-windows-exe.json"
+    }
+  },
+  "workflows": {
+    "python_release": {
+      "conclusion": "success",
+      "headSha": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "status": "completed",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/actions/runs/45668810018"
+    },
+    "rust_release": {
+      "conclusion": "success",
+      "headSha": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "status": "completed",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/actions/runs/45668808388"
+    },
+    "main_ci": {
+      "conclusion": "success",
+      "headSha": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "status": "completed",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/actions/runs/45668801152"
+    },
+    "rust_branch_ci": {
+      "conclusion": "success",
+      "headSha": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "status": "completed",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/actions/runs/45668800923"
+    },
+    "python_rust_branch_ci": {
+      "conclusion": "success",
+      "headSha": "9c51f0e61d30308f23053a9fefca18d0146b347d",
+      "status": "completed",
+      "url": "https://github.com/hellomrli/forever-fishing-zh/actions/runs/45668800694"
+    }
+  },
+  "regression_tests_per_platform": {
+    "python": 125,
+    "rust": 51
+  },
+  "fishing": {
+    "pickup_wait_s": 0.5,
+    "no_bite_timeout_s": 30.0,
+    "lingering_gear_delays_recast": false,
+    "duplicate_pickup_sound_delays_recast": false,
+    "legacy_pause_delays_successful_recast": false
+  },
+  "rust_minimum_version": "1.88",
+  "gui_window": [
+    900,
+    640
+  ],
+  "gui_font_scales": [
+    100,
+    125,
+    150
+  ],
+  "upstream_reviewed": "97653ba0566d2e1c14b70848888c76f674f7655e",
+  "checks": {
+    "native_windows_builds": true,
+    "generated_exe_smoke_tests": true,
+    "portable_archives": true,
+    "github_asset_digests": true
+  },
+  "not_verified": [
+    "Actual Forever client fishing with this patch"
+  ]
+}

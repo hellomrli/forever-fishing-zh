@@ -11,6 +11,8 @@
 
 继续作为 Rust 原生预览版，提供 Windows 图形版、命令行版、便携 ZIP、构建信息与 SHA256 校验文件。流程回归覆盖齿轮残留、旧配置长间隔、重复声音、按键发送延迟、暂停及四段内置真实音频。
 
-本地 Rust 51 项、Python 125 项回归全部通过，严格 Clippy 与两版原生界面自检通过。Windows 发布流程还会检查 Rust 1.88 最低版本、两平台回归、原生构建生成的 EXE 与发布资产 SHA256。
+Rust 51 项、Python 125 项回归在 Linux 与 Windows 均通过，严格 Clippy 与两版原生界面自检通过。Rust 1.88 最低版本检查、Windows 原生构建生成的 EXE 自检与下载后的 SHA256 校验均已完成。
 
 完整规则见 [简化钓鱼设计](https://github.com/hellomrli/forever-fishing-zh/blob/main/docs/简化钓鱼设计.md)。
+
+[查看本版 Windows 发布验证记录](https://github.com/hellomrli/forever-fishing-zh/blob/main/docs/audit/release-validation-2026-11-26.json)。

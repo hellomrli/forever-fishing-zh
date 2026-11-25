@@ -1,0 +1,179 @@
+{
+  "checks": {
+    "audio_peak": 0.9999997615814209,
+    "config_latest_update": true,
+    "config_utf8_comments": true,
+    "embedded_clips": 4,
+    "embedded_icons": 5,
+    "platform": {
+      "capture": true,
+      "chinese_window": true,
+      "hotkeys": true,
+      "minimize_restore": true,
+      "move_resize": true,
+      "supported": true
+    },
+    "vision_score": 1.0
+  },
+  "elapsed_s": 2.5689308,
+  "errors": [],
+  "font_scales": [
+    100,
+    125,
+    150
+  ],
+  "layouts": [
+    {
+      "font_scale": 100,
+      "page": "钓鱼",
+      "scroll_position": "top",
+      "visible_controls": {
+        "停止": true,
+        "开始钓鱼": true,
+        "暂停钓鱼": true
+      }
+    },
+    {
+      "font_scale": 100,
+      "page": "设置",
+      "scroll_position": "top",
+      "visible_controls": {}
+    },
+    {
+      "font_scale": 100,
+      "page": "设置",
+      "scroll_position": "bottom",
+      "visible_controls": {
+        "备份并恢复默认配置": true
+      }
+    },
+    {
+      "font_scale": 100,
+      "page": "校准与诊断",
+      "scroll_position": "top",
+      "visible_controls": {
+        "复制": true
+      }
+    },
+    {
+      "font_scale": 100,
+      "page": "校准与诊断",
+      "scroll_position": "bottom",
+      "visible_controls": {
+        "导出日志": true,
+        "环境诊断": true
+      }
+    },
+    {
+      "font_scale": 125,
+      "page": "钓鱼",
+      "scroll_position": "top",
+      "visible_controls": {
+        "停止": true,
+        "开始钓鱼": true,
+        "暂停钓鱼": true
+      }
+    },
+    {
+      "font_scale": 125,
+      "page": "设置",
+      "scroll_position": "top",
+      "visible_controls": {}
+    },
+    {
+      "font_scale": 125,
+      "page": "设置",
+      "scroll_position": "bottom",
+      "visible_controls": {
+        "备份并恢复默认配置": true
+      }
+    },
+    {
+      "font_scale": 125,
+      "page": "校准与诊断",
+      "scroll_position": "top",
+      "visible_controls": {
+        "复制": true
+      }
+    },
+    {
+      "font_scale": 125,
+      "page": "校准与诊断",
+      "scroll_position": "bottom",
+      "visible_controls": {
+        "导出日志": true,
+        "环境诊断": true
+      }
+    },
+    {
+      "font_scale": 150,
+      "page": "钓鱼",
+      "scroll_position": "top",
+      "visible_controls": {
+        "停止": true,
+        "开始钓鱼": true,
+        "暂停钓鱼": true
+      }
+    },
+    {
+      "font_scale": 150,
+      "page": "设置",
+      "scroll_position": "top",
+      "visible_controls": {}
+    },
+    {
+      "font_scale": 150,
+      "page": "设置",
+      "scroll_position": "bottom",
+      "visible_controls": {
+        "备份并恢复默认配置": true
+      }
+    },
+    {
+      "font_scale": 150,
+      "page": "校准与诊断",
+      "scroll_position": "top",
+      "visible_controls": {
+        "复制": true
+      }
+    },
+    {
+      "font_scale": 150,
+      "page": "校准与诊断",
+      "scroll_position": "bottom",
+      "visible_controls": {
+        "导出日志": true,
+        "环境诊断": true
+      }
+    }
+  ],
+  "native_rust": true,
+  "ok": true,
+  "pages": [
+    "钓鱼",
+    "设置",
+    "校准与诊断"
+  ],
+  "screenshots": [
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-1-top-scale-100.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-2-top-scale-100.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-2-bottom-scale-100.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-3-top-scale-100.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-3-bottom-scale-100.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-1-top-scale-125.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-2-top-scale-125.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-2-bottom-scale-125.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-3-top-scale-125.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-3-bottom-scale-125.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-1-top-scale-150.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-2-top-scale-150.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-2-bottom-scale-150.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-3-top-scale-150.png",
+    "D:\\a\\forever-fishing-zh\\forever-fishing-zh\\checks\\rust-page-3-bottom-scale-150.png"
+  ],
+  "version": "2.0.0-alpha.4",
+  "window": [
+    900,
+    640
+  ]
+}

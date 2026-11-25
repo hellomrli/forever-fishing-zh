@@ -1,0 +1,132 @@
+{
+  "ok": true,
+  "version": "1.1.1",
+  "platform": "win32",
+  "frozen": true,
+  "title": "Forever 钓鱼助手 1.1.1",
+  "tabs": [
+    "钓鱼",
+    "设置",
+    "校准与诊断"
+  ],
+  "chinese_font": "Microsoft YaHei UI",
+  "heading_font": {
+    "family": "Microsoft YaHei UI",
+    "size": 13,
+    "weight": "bold",
+    "slant": "roman",
+    "underline": 0,
+    "overstrike": 0
+  },
+  "layouts": [
+    {
+      "scale": 1.0,
+      "page": "钓鱼",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 19
+    },
+    {
+      "scale": 1.0,
+      "page": "设置",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 19
+    },
+    {
+      "scale": 1.0,
+      "page": "校准与诊断",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 19
+    },
+    {
+      "scale": 1.25,
+      "page": "钓鱼",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 23
+    },
+    {
+      "scale": 1.25,
+      "page": "设置",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 23
+    },
+    {
+      "scale": 1.25,
+      "page": "校准与诊断",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 23
+    },
+    {
+      "scale": 1.5,
+      "page": "钓鱼",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 27
+    },
+    {
+      "scale": 1.5,
+      "page": "设置",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 27
+    },
+    {
+      "scale": 1.5,
+      "page": "校准与诊断",
+      "size": [
+        900,
+        640
+      ],
+      "font_height": 27
+    }
+  ],
+  "screenshots": [
+    "smoke-page-1.png",
+    "smoke-page-2.png",
+    "smoke-page-3.png"
+  ],
+  "audio_switch_nonblocking": true,
+  "audio_switch_resumed": true,
+  "pending_stop": true,
+  "windows": {
+    "hotkeys": [
+      20225,
+      20226
+    ],
+    "chinese_window": true,
+    "capture_move_resize": true,
+    "minimize_restore": true,
+    "window_close": true,
+    "process_audio": {
+      "state": "opened",
+      "name": "游戏进程音频（PID 988）"
+    }
+  },
+  "config_utf8": true,
+  "invalid_key_rejected": true,
+  "chinese_image_path": true,
+  "manual_region": true,
+  "log_export": true,
+  "callbacks_clean": true
+}
