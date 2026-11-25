@@ -54,9 +54,6 @@ def describe(event: ev.Event) -> str:
             return msg("lost_icon")
         case ev.BiteHeard(clip=clip, score=score):
             return f"识别到{clip_label(clip)}，得分 {score:.2f}"
-        case ev.BiteRejected(score=score, change=change, needed=needed):
-            seen = f"画面变化 {change:.1f}，需要 {needed:.1f}" if needed else "尚无画面样本"
-            return f"水花得分 {score:.2f}，自己的浮漂没有明显变化（{seen}），继续等待"
         case ev.AudioOpened(name=name, fallback=fallback):
             return f"音频来源：{name}" + (f"；{fallback}" if fallback else "")
         case ev.KeyPressed(key=key, why=why):
@@ -75,13 +72,13 @@ def describe(event: ev.Event) -> str:
             return f"{label}超时（{seconds:g} 秒）" + (f"；{detail}" if detail else "")
         case ev.Listening(best_clip=clip, best_score=score, threshold=threshold):
             return (
-                f"最高水花得分 {max(0, score):.2f}（{clip_label(clip) or '无'}），"
+                f"最高咬钩声音得分 {max(0, score):.2f}（{clip_label(clip) or '无'}），"
                 f"阈值 {threshold:.2f}"
             )
         case ev.Paused(reason=reason):
             return f"已暂停：{reason}"
         case ev.Resumed():
-            return "已恢复，将从新的一竿开始"
+            return "已恢复，先检查金色齿轮；存在就等待，不存在才抛竿"
         case ev.Stats():
             return event.as_line()
         case ev.Error(message=message):
@@ -142,7 +139,6 @@ class ScoreTrace:
     points: list[tuple[float, dict[str, float]]] = field(default_factory=list)
     threshold: float | None = None
     bite: tuple[float, str, float] | None = None
-    timed_out: bool = False
     version: int = 0
 
 
@@ -629,15 +625,12 @@ class Presenter:
             case ev.BiteHeard(clip=clip, score=score):
                 self.trace.bite = (event.t, clip, score)
                 self.trace.version += 1
-            case ev.Timeout(what="bite"):
-                self.trace.timed_out = True
-                self.trace.version += 1
             case ev.Stats():
                 self.stats = event.as_line()
             case ev.Paused(reason=reason):
-                self.state, self.did, self.next = State.PAUSED.name, reason, "恢复后从新的一竿开始"
+                self.state, self.did, self.next = State.PAUSED.name, reason, "恢复后先检查金色齿轮"
             case ev.Resumed(state=state):
-                self.state, self.did, self.next = state.name, "已恢复", "准备重新抛竿"
+                self.state, self.did, self.next = state.name, "已恢复", "先检查金色齿轮"
             case ev.AudioOpened(name=name, fallback=fallback):
                 self.audio_name = name
                 if fallback:
@@ -664,7 +657,8 @@ class Presenter:
             case VerifyDone(report=r):
                 if r.stands_out:
                     return (
-                        f"录音检测到 {len(r.bites)} 次水花，建议阈值 {r.threshold:.2f}；保存后生效"
+                        f"录音检测到 {len(r.bites)} 次咬钩声音，"
+                        f"建议阈值 {r.threshold:.2f}；保存后生效"
                     )
                 return "录音中没有清晰的咬钩声音；请检查音效和实际音频来源后重试"
             case WorkerFailed(what=what, message=message):
@@ -902,7 +896,7 @@ class Presenter:
                     task.stop.wait(0.02)
             if task.stop.is_set():
                 return
-            self.verify_status = "正在分析水花录音"
+            self.verify_status = "正在分析咬钩声音录音"
             y = np.concatenate(chunks) if chunks else np.zeros(0, np.float32)
             if len(y) < DEFAULT_MEL.n_fft:
                 raise RuntimeError("没有采集到有效音频，请检查输出设备和音效")

@@ -40,7 +40,7 @@ def run(
         ),
     ] = None,
 ) -> None:
-    """自动抛竿、确认水花与浮漂变化、收杆并重复。Ctrl-C 停止。"""
+    """齿轮不存在就抛竿，存在就等待；听到咬钩声音立即起杆。Ctrl-C 停止。"""
     cfg = load_config_or_fail()
     try:
         engine = build_engine(

@@ -20,9 +20,9 @@ def verify_bite(
         Path,
         typer.Argument(exists=True, dir_okay=False, help="listen --record 保存的 WAV 录音。"),
     ],
-    save: bool = typer.Option(False, "--save", help="将建议的水花阈值保存到配置文件。"),
+    save: bool = typer.Option(False, "--save", help="将建议的咬钩声音阈值保存到配置文件。"),
 ) -> None:
-    """分析水花录音，给出得分和阈值建议。"""
+    """分析咬钩声音录音，给出得分和阈值建议。"""
     from wowfish.audio.clips import build_fingerprints
     from wowfish.audio.features import MelParams
     from wowfish.audio.verify import bite_report, clip_peaks, score_recording
@@ -46,7 +46,7 @@ def verify_bite(
         when = ", ".join(f"{b.t:.1f}s ({b.name})" for b in sorted(report.bites, key=lambda b: b.t))
         typer.echo(f"{len(report.bites)} bite(s) scoring {lo:.2f}-{hi:.2f} at {when}")
         typer.echo(f"everything else scores at most {report.floor:.2f}")
-    typer.echo(f"建议水花阈值：{threshold:.2f}")
+    typer.echo(f"建议咬钩声音阈值：{threshold:.2f}")
     if not report.stands_out:
         typer.echo(
             f"提示：没有清晰的咬钩声音，最高得分 {best.score:.2f}，背景最高 {report.floor:.2f}；"

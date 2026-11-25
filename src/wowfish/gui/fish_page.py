@@ -23,7 +23,9 @@ class FishPage:
         self.p = presenter
         self.frame = f = tb.Frame(parent, padding=16)
         wrapped_label(
-            f, "选择客户端 → 检查游戏设置 → 校准与试听 → 开始钓鱼", bootstyle="info"
+            f,
+            "齿轮不存在就抛竿，存在就等待；听到声音立即起杆，默认 30 秒无咬钩声音重抛。",
+            bootstyle="info",
         ).pack(fill="x", pady=(0, 10))
         clients = tb.Frame(f)
         clients.pack(fill="x")
@@ -101,7 +103,7 @@ class FishPage:
         self.log = ScrolledText(
             tabs, height=8, width=36, wrap="word", font="TkDefaultFont", state="disabled"
         )
-        tabs.add(self.graph.canvas, text="水花得分")
+        tabs.add(self.graph.canvas, text="咬钩声音得分")
         tabs.add(self.log, text="运行日志")
 
     def refresh_windows(self) -> None:
@@ -168,7 +170,7 @@ class FishPage:
         self.hotkeys.configure(
             text=f"暂停 / 继续：{g.pause_hotkey.upper() or '未设置'}    "
             f"停止：{g.stop_hotkey.upper() or '未设置'}"
-            "    切出游戏会自动暂停，切回后重新抛竿"
+            "    切出游戏会自动暂停，切回后先检查齿轮"
         )
         self.start.configure(state="disabled" if view.running or view.working else "normal")
         self.pause.configure(
@@ -186,7 +188,7 @@ class FishPage:
                     width=self.preview.winfo_width(), height=self.preview.winfo_height()
                 )
             )
-        self.graph.show(view.trace, self.p.cfg.run.cast_timeout_s)
+        self.graph.show(view.trace)
         if view.new_lines:
             self.log.configure(state="normal")
             self.log.insert("end", "\n".join(view.new_lines) + "\n")

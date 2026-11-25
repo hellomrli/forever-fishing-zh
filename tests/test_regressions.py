@@ -25,7 +25,6 @@ from wowfish.audio._recording import RecordingSource
 from wowfish.audio._threaded import ThreadedSource
 from wowfish.audio._wasapi import ProcessLoopbackSource, to_mono_22050
 from wowfish.audio.clips import build_fingerprints
-from wowfish.audio.detector import BiteEvent
 from wowfish.audio.features import DEFAULT_MEL
 from wowfish.audio.verify import bite_report, clip_peaks, score_recording
 from wowfish.audio.wav import read_wav
@@ -54,9 +53,7 @@ from wowfish.gui.presenter import (
     Presenter,
     VerifyDone,
     WorkerFailed,
-    describe,
 )
-from wowfish.vision.bite import VisualBiteVerifier
 from wowfish.vision.calibrate import Calibration, calibrate_icon_scale
 from wowfish.vision.imageio import read_image, write_image
 from wowfish.vision.matcher import IconMatch, IconMatcher
@@ -135,7 +132,7 @@ def engine(io, **kwargs):
         "cfg",
         Config(
             GameConfig(),
-            VisionConfig(confirm_bite=False),
+            VisionConfig(),
             AudioConfig(),
             run=RunConfig(pause_min_s=0, pause_max_s=0),
         ),
@@ -148,6 +145,9 @@ def engine(io, **kwargs):
         audio_source=io,
         detector=io,
         matcher=io,
+        calibrate=kwargs.pop(
+            "calibrate", lambda *_args, **_kw: Calibration(18, 29, io.score, 40, 30, 1.0, 0.4)
+        ),
         clock=io.clock,
         sleep=io.sleep,
         **kwargs,
@@ -266,7 +266,7 @@ def test_one_missing_frame_is_not_a_catch_and_recovery_resets_confirmation():
     e.step()
     assert e._misses == 0 and e._disappeared_since is None
     io.score = 0.0
-    for _ in range(2):
+    for _ in range(4):
         io.t += 0.26
         e.step()
         assert e.stats.catches == 0
@@ -401,7 +401,7 @@ def test_loop_waits_even_without_new_audio_and_when_paused():
     assert e.state is State.PAUSED and io.t > before
 
 
-def test_pause_and_resize_resume_with_a_new_cast_and_never_switch_pid():
+def test_pause_and_resize_recheck_the_gear_and_never_switch_pid():
     io = FakeIO()
     e = engine(io, find_window=lambda _: io.window)
     e.state, e._icon_xy = State.WAIT_BITE, (40, 30)
@@ -410,7 +410,7 @@ def test_pause_and_resize_resume_with_a_new_cast_and_never_switch_pid():
     assert e.state is State.PAUSED and io.pressed == []
     io.focused = True
     e.step()
-    assert e.state is State.CASTING and io.pressed == ["1"] and io.clears == 1
+    assert e.state is State.WAIT_BITE and io.pressed == [] and io.clears == 0
     io.window = replace(io.window, minimized=True)
     io.t += 0.3
     e.step()
@@ -418,17 +418,18 @@ def test_pause_and_resize_resume_with_a_new_cast_and_never_switch_pid():
     io.window = replace(io.window, minimized=False, width=100)
     io.t += 0.3
     e.step()
-    assert e.state is State.CASTING and io.pressed == ["1", "1"]
+    assert e.state is State.WAIT_BITE and io.pressed == []
     io.window = replace(io.window, pid=999)
     io.t += 0.3
     e.step()
-    assert e.state is State.STOPPED and io.pressed == ["1", "1"]
+    assert e.state is State.STOPPED and io.pressed == []
 
 
 @pytest.mark.parametrize("interruption", ["pause", "focus"])
 def test_interrupted_lure_is_reapplied_after_resume(interruption):
     io = FakeIO()
-    cfg = Config(GameConfig(lure_key="3"), VisionConfig(confirm_bite=False), AudioConfig())
+    io.score = 0.0
+    cfg = Config(GameConfig(lure_key="3"), VisionConfig(), AudioConfig())
     e = engine(io, cfg=cfg)
 
     def interrupt(seconds):
@@ -459,7 +460,7 @@ def test_focus_loss_interrupts_a_long_break_promptly():
     io = FakeIO()
     cfg = Config(
         GameConfig(),
-        VisionConfig(confirm_bite=False),
+        VisionConfig(),
         AudioConfig(),
         run=RunConfig(pause_min_s=120, pause_max_s=120),
     )
@@ -1032,140 +1033,6 @@ def test_legacy_home_fallback_and_preferred_home(tmp_path, monkeypatch, prefer_n
     wanted = current if prefer_new else legacy
     assert paths.config_file() == wanted / "config" / "config.toml"
     assert ensure_config_file()
-
-
-def test_visual_confirmation_rejects_other_sound_before_interacting():
-    io = FakeIO()
-    verifier = SimpleNamespace(confirmed=lambda _: False)
-    e = engine(io, bite_verifier=verifier)
-    e.state, e._icon_xy = State.WAIT_BITE, (40, 30)
-    event = BiteEvent("fishbite", 0.9, 0.0)
-    e._wait_bite(0.0, [event])
-    assert io.pressed == [] and e.state is State.WAIT_BITE
-    e._wait_bite(0.7, [])
-    assert any(isinstance(item, ev.BiteRejected) for item in e.events.queue)
-    assert io.pressed == []
-    verifier.confirmed = lambda _: True
-    e._wait_bite(0.8, [event])
-    assert io.pressed == ["f"] and e.state is State.INTERACT
-
-
-def test_visual_sampling_ignores_changes_outside_own_bobber_crop():
-    io = FakeIO(WindowRef("魔兽世界", 123, 0, 0, 200, 160, 456))
-    verifier = VisualBiteVerifier(8)
-    e = engine(io, bite_verifier=verifier)
-    e._icon_xy, e._icon_size = (80, 40), 18
-    for step in range(7):  # still water first: changes are judged against what came before
-        e._observe_bobber(step * 0.2)
-    io.frame[20:50, 150:180] = 200
-    e._observe_bobber(1.4)
-    assert not verifier.confirmed(1.4)
-    io.frame[50:80, 60:90] = 200
-    e._observe_bobber(1.6)
-    assert verifier.confirmed(1.6)
-    assert not verifier.confirmed(3.3)
-
-
-def test_visual_confirmation_sees_a_splash_smaller_than_the_icon():
-    rng = np.random.default_rng(3)
-    verifier = VisualBiteVerifier(8)
-
-    def water():  # the 4 x 5 icon-side crop the engine watches, for a 42 px icon
-        return np.clip(rng.normal(90, 4, (210, 168, 3)), 0, 255).astype(np.uint8)
-
-    now = 0.0
-    for _ in range(30):
-        verifier.observe(water(), now)
-        now += 0.1
-        assert not verifier.confirmed(now)  # shimmering water alone never confirms
-    splash = water()
-    splash[100:126, 70:96] = 230  # 26 x 26 px: under 2% of the crop, 40% of the icon's area
-    verifier.observe(splash, now)
-    assert verifier.confirmed(now)
-    change, needed = verifier.strongest(now)
-    assert change >= needed >= 8
-
-
-def _lose_a_heard_bite(e, io):
-    """One cast: the splash is heard, the picture does not confirm it, the bobber goes away."""
-    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
-    e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
-    io.t += 0.7
-    e._wait_bite(io.t, [])
-    io.score = 0.0
-    for _ in range(3):
-        io.t += 0.3
-        e._wait_bite(io.t, [])
-    io.score = 0.9
-    assert e.state is State.IDLE and io.pressed == []
-
-
-def test_picture_check_stops_vetoing_after_two_casts_lost_to_it():
-    io = FakeIO()
-    e = engine(io, bite_verifier=SimpleNamespace(confirmed=lambda _: False, reset=lambda: None))
-    _lose_a_heard_bite(e, io)
-    assert e.verifier is not None
-    _lose_a_heard_bite(e, io)
-    assert e.verifier is None
-    notices = [item.message for item in e.events.queue if isinstance(item, ev.Error)]
-    assert len(notices) == 1 and "画面确认" in notices[0]
-    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
-    e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
-    assert io.pressed == ["f"] and e.state is State.INTERACT
-
-
-def test_a_confirmed_bite_keeps_the_picture_check_and_rejections_report_what_was_seen():
-    io = FakeIO()
-    verifier = SimpleNamespace(
-        confirmed=lambda _: False, reset=lambda: None, strongest=lambda _: (3.5, 8.0)
-    )
-    e = engine(io, bite_verifier=verifier)
-    _lose_a_heard_bite(e, io)
-    rejected = next(item for item in e.events.queue if isinstance(item, ev.BiteRejected))
-    assert (rejected.change, rejected.needed) == (3.5, 8.0)
-    assert "画面变化 3.5，需要 8.0" in describe(rejected)
-    verifier.confirmed = lambda _: True
-    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
-    e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
-    assert io.pressed == ["f"]
-    io.pressed.clear()
-    verifier.confirmed = lambda _: False
-    _lose_a_heard_bite(e, io)
-    assert e.verifier is verifier  # one loss since the last confirmed bite, not two in a row
-
-
-def test_an_unheard_cast_breaks_the_picture_check_failure_streak():
-    io = FakeIO()
-    verifier = SimpleNamespace(confirmed=lambda _: False, reset=lambda: None)
-    e = engine(io, bite_verifier=verifier)
-    _lose_a_heard_bite(e, io)
-    e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
-    io.score = 0.0
-    for _ in range(3):
-        io.t += 0.3
-        e._wait_bite(io.t, [])
-    assert e.state is State.IDLE
-    io.score = 0.9
-    _lose_a_heard_bite(e, io)
-    assert e.verifier is verifier
-
-
-def test_pending_picture_confirmation_counts_when_the_cast_times_out():
-    io = FakeIO()
-    e = engine(io, bite_verifier=SimpleNamespace(confirmed=lambda _: False, reset=lambda: None))
-    e.cfg = replace(
-        e.cfg,
-        vision=replace(e.cfg.vision, confirm_window_s=2.0),
-        run=replace(e.cfg.run, cast_timeout_s=0.5),
-    )
-    for _ in range(2):
-        e._t_cast = io.t
-        e._found(io.frame, IconMatch(0.9, 40, 30, 18, 1.0))
-        e._wait_bite(io.t, [BiteEvent("fishbite", 0.9, 0.0)])
-        io.t += 0.6
-        e._wait_bite(io.t, [])
-        assert e.state is State.IDLE and io.pressed == []
-    assert e.verifier is None
 
 
 @pytest.mark.parametrize("size", [12, 14, 16, 18])

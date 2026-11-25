@@ -14,7 +14,7 @@ _FILE_FORMAT = "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <7} | {name}:{line} | {
 
 app = typer.Typer(
     name="foreverfish",
-    help="Forever 钓鱼助手：中文桌面界面、图标识别与水花音频确认。",
+    help="Forever 钓鱼助手：监控金色齿轮，听到咬钩声音立即起杆。",
     no_args_is_help=True,
     add_completion=False,
 )

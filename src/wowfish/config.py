@@ -61,9 +61,6 @@ class VisionConfig:
     icon_native_size: int = 0
     icon_threshold: float = 0.75
     match_width: int = 1920
-    confirm_bite: bool = True
-    confirm_window_s: float = 0.6
-    motion_threshold: float = 8.0
     search_left: float = 0.0
     search_top: float = 0.0
     search_right: float = 1.0
@@ -88,13 +85,11 @@ class AudioConfig:
 class RunConfig:
     icon_timeout_s: float = 4.0
     cast_timeout_s: float = 30.0
-    loot_timeout_s: float = 3.0
     pause_min_s: float = 0.5
     pause_max_s: float = 2.0
     key_hold_ms: int = 60
     lure_cast_s: float = 6.0
     tick_interval_s: float = 0.02
-    loot_confirm_s: float = 0.4
 
 
 @dataclass(frozen=True)
@@ -103,9 +98,6 @@ class BehaviorConfig:
     break_every_max_minutes: float = 0.0  # 0 = never take a break
     break_min_minutes: float = 0.0
     break_max_minutes: float = 0.0
-    reaction_min_ms: int = 0
-    reaction_max_ms: int = 0
-    skip_bite_chance: float = 0.0
     key_hold_jitter_ms: int = 0
     jump_chance: float = 0.0
     jump_key: str = "space"
@@ -127,6 +119,19 @@ _SECTIONS: dict[str, type] = {
     "run": RunConfig,
     "behavior": BehaviorConfig,
 }
+# Older files keep their comments and values; these settings no longer affect the loop.
+_RETIRED_SETTINGS = frozenset(
+    {
+        "vision.confirm_bite",
+        "vision.confirm_window_s",
+        "vision.motion_threshold",
+        "run.loot_timeout_s",
+        "run.loot_confirm_s",
+        "behavior.reaction_min_ms",
+        "behavior.reaction_max_ms",
+        "behavior.skip_bite_chance",
+    }
+)
 
 
 @contextmanager
@@ -327,7 +332,8 @@ def _build_section(
     kwargs: dict[str, Any] = {}
     for key, value in table.items():
         if key not in known:
-            warnings.append(f"unknown key {section}.{key} ignored")
+            if f"{section}.{key}" not in _RETIRED_SETTINGS:
+                warnings.append(f"unknown key {section}.{key} ignored")
             continue
         expected = _expected_type(known[key].type)
         if expected is float and isinstance(value, int) and not isinstance(value, bool):
@@ -385,30 +391,24 @@ def _validate(path: Path, cfg: Config) -> None:
     check(v.icon_native_size >= 0, "vision.icon_native_size", "must be 0 or positive")
     check(0 <= v.search_left < v.search_right <= 1, "vision.search_region", "水平范围必须在 0–1 内")
     check(0 <= v.search_top < v.search_bottom <= 1, "vision.search_region", "垂直范围必须在 0–1 内")
-    check(0 < v.confirm_window_s <= 2, "vision.confirm_window_s", "必须在 0–2 秒内")
-    check(0 < v.motion_threshold <= 255, "vision.motion_threshold", "必须在 0–255 内")
     check(a.capture in ("game", "device"), "audio.capture", 'must be "game" or "device"')
     check(0.0 < a.bite_threshold <= 1.0, "audio.bite_threshold", "must be in (0, 1]")
     check(a.refractory_s >= 0.0, "audio.refractory_s", "must be 0 or positive")
     r = cfg.run
     check(r.icon_timeout_s > 0, "run.icon_timeout_s", "must be positive")
     check(r.cast_timeout_s > 0, "run.cast_timeout_s", "must be positive")
-    check(r.loot_timeout_s > 0, "run.loot_timeout_s", "must be positive")
     check(r.pause_min_s >= 0, "run.pause_min_s", "must be 0 or positive")
     check(r.pause_min_s <= r.pause_max_s, "run.pause_min_s", "must not exceed run.pause_max_s")
     check(r.lure_cast_s >= 0, "run.lure_cast_s", "must be 0 or positive")
     check(0.005 <= r.tick_interval_s <= 0.2, "run.tick_interval_s", "必须在 0.005–0.2 秒内")
-    check(0 < r.loot_confirm_s < r.loot_timeout_s, "run.loot_confirm_s", "必须小于拾取超时")
     check(10 <= r.key_hold_ms <= 500, "run.key_hold_ms", "must be between 10 and 500")
     b = cfg.behavior
     for lo, hi in (
         ("break_every_min_minutes", "break_every_max_minutes"),
         ("break_min_minutes", "break_max_minutes"),
-        ("reaction_min_ms", "reaction_max_ms"),
     ):
         check(getattr(b, lo) >= 0, f"behavior.{lo}", "must be 0 or positive")
         check(getattr(b, lo) <= getattr(b, hi), f"behavior.{lo}", f"must not exceed behavior.{hi}")
-    check(0.0 <= b.skip_bite_chance < 1.0, "behavior.skip_bite_chance", "must be in [0, 1)")
     check(0.0 <= b.jump_chance <= 1.0, "behavior.jump_chance", "must be in [0, 1]")
     check(
         b.key_hold_jitter_ms >= 0 and r.key_hold_ms - b.key_hold_jitter_ms >= 10,

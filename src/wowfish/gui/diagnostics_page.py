@@ -148,7 +148,7 @@ class DiagnosticsPage:
         )
         self.copy_note.pack(fill="x", pady=(4, 0))
 
-        audio = tb.Labelframe(f, text="音频来源与水花验证", padding=12)
+        audio = tb.Labelframe(f, text="音频来源与咬钩声音验证", padding=12)
         audio.pack(fill="x", pady=6)
         audio.columnconfigure(0, weight=1)
         self.device = tb.Combobox(audio, state="readonly", width=48)
@@ -183,7 +183,9 @@ class DiagnosticsPage:
         self.cancel.pack(side="left", padx=8)
         self.meter = tb.Progressbar(audio, maximum=100, bootstyle="info")
         self.meter.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(10, 4))
-        self.level = wrapped_label(audio, "点击试听后显示音量和水花得分。", bootstyle="secondary")
+        self.level = wrapped_label(
+            audio, "点击试听后显示音量和咬钩声音得分。", bootstyle="secondary"
+        )
         self.level.grid(row=4, column=0, columnspan=2, sticky="ew")
         self.source = wrapped_label(
             audio, "启动时会实际检查捕获能力；系统回环包含其他程序的声音。", bootstyle="secondary"
@@ -191,7 +193,7 @@ class DiagnosticsPage:
         self.source.grid(row=5, column=0, columnspan=2, sticky="ew", pady=4)
         threshold = tb.Frame(audio)
         threshold.grid(row=6, column=0, columnspan=2, sticky="ew", pady=8)
-        tb.Label(threshold, text="水花得分阈值").pack(side="left")
+        tb.Label(threshold, text="咬钩声音得分阈值").pack(side="left")
         self.bite = tb.Entry(threshold, width=8)
         set_entry(self.bite, f"{presenter.cfg.audio.bite_threshold:.2f}")
         self.bite.pack(side="left", padx=8)
@@ -374,7 +376,7 @@ class DiagnosticsPage:
         best = max(view.last_scores.values(), default=-1.0)
         self.level.configure(
             text=("静音" if view.level_dbfs <= -60 else f"音量 {view.level_dbfs:.1f} dBFS")
-            + (f"，最高水花得分 {max(0, best):.2f}" if view.listening else "；当前未试听")
+            + (f"，最高咬钩声音得分 {max(0, best):.2f}" if view.listening else "；当前未试听")
         )
         if view.audio_name:
             self.source.configure(text=f"实际音频来源：{view.audio_name}")
@@ -388,7 +390,7 @@ class DiagnosticsPage:
             self._audio_status_shown = False
             self.audio_note.configure(
                 text=(
-                    "正在试听，请切回游戏观察音量和水花得分。"
+                    "正在试听，请切回游戏观察音量和咬钩声音得分。"
                     if view.listening
                     else "任务已结束，可以重新试听或录音验证。"
                 ),

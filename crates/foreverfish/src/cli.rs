@@ -50,14 +50,14 @@ enum Command {
         #[arg(long, help = "目标客户端进程 PID，多客户端时必填")]
         pid: Option<u32>,
     },
-    #[command(about = "试听并显示水花得分")]
+    #[command(about = "试听并显示咬钩声音得分")]
     Listen {
         #[arg(long)]
         pid: Option<u32>,
         #[arg(long, default_value_t = 0)]
         seconds: u32,
     },
-    #[command(about = "流式录制 WAV 并分析水花")]
+    #[command(about = "流式录制 WAV 并分析咬钩声音")]
     Record {
         output: PathBuf,
         #[arg(long)]
@@ -65,7 +65,10 @@ enum Command {
         #[arg(long, default_value_t = 60)]
         seconds: u32,
     },
-    #[command(name = "verify-bite", about = "离线分析 WAV，给出水花峰值与建议阈值")]
+    #[command(
+        name = "verify-bite",
+        about = "离线分析 WAV，给出咬钩声音峰值与建议阈值"
+    )]
     VerifyBite { file: PathBuf },
     #[command(about = "从游戏或 PNG 图像校准金色齿轮")]
     Calibrate {

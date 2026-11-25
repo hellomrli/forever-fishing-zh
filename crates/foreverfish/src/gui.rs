@@ -354,10 +354,10 @@ impl App {
     }
     fn apply_report(&mut self, report: Report) {
         self.message = if report.bites.is_empty() {
-            "没有检测到足够清晰的水花，保留当前阈值".into()
+            "没有检测到足够清晰的咬钩声音，保留当前阈值".into()
         } else {
             format!(
-                "检测到 {} 次清晰水花，建议阈值 {:.2}；点击保存阈值后生效",
+                "检测到 {} 次清晰咬钩声音，建议阈值 {:.2}；点击保存阈值后生效",
                 report.bites.len(),
                 report.threshold
             )
@@ -421,7 +421,9 @@ impl App {
         ui.label(
             "游戏内开启自动拾取，绑定“与目标互动”，并执行 /console SoftTargetIconGameObject 1。",
         );
-        ui.label("切出或最小化游戏会自动暂停，恢复后重新抛竿。");
+        ui.label("齿轮不存在就抛竿，存在就等待；听到咬钩声音立即按拾取键起杆。");
+        ui.small("默认 30 秒没有咬钩声音就重新抛竿，即使金色齿轮仍在。");
+        ui.small("切出或最小化游戏会自动暂停，恢复后先检查齿轮。");
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             for (label, value) in [
@@ -484,7 +486,7 @@ impl App {
     }
 
     fn score_graph(&self, ui: &mut egui::Ui) {
-        ui.label("最近的水花得分");
+        ui.label("最近的咬钩声音得分");
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(ui.available_width(), 120.0), Sense::hover());
         ui.painter()
@@ -529,7 +531,7 @@ impl App {
             }
         }
         ui.horizontal_wrapped(|ui| {
-            for (label, color) in ["水花 1", "水花 2", "水花 3", "咬钩音"]
+            for (label, color) in ["咬钩音 1", "咬钩音 2", "咬钩音 3", "咬钩音"]
                 .into_iter()
                 .zip(colors)
             {
@@ -564,7 +566,7 @@ impl App {
             .show(ui, |ui| {
                 for (label, key) in [
                     ("抛竿键", &mut self.config.game.cast_key),
-                    ("与目标互动键", &mut self.config.game.interact_key),
+                    ("拾取 / 起杆键", &mut self.config.game.interact_key),
                     ("补饵宏键（可留空）", &mut self.config.game.lure_key),
                     ("退出宏键（可留空）", &mut self.config.game.quit_key),
                     ("暂停 / 继续快捷键", &mut self.config.game.pause_hotkey),
@@ -601,29 +603,15 @@ impl App {
             self.refresh_windows();
         }
         ui.separator();
-        ui.heading("画面确认");
-        ui.checkbox(
-            &mut self.config.vision.confirm_bite,
-            "听到水花时，核对自己浮漂附近的画面变化",
-        );
-        ui.add(
-            egui::Slider::new(&mut self.config.vision.motion_threshold, 1.0..=255.0)
-                .text("最低画面变化"),
-        );
-        ui.add(
-            egui::Slider::new(&mut self.config.vision.confirm_window_s, 0.05..=2.0)
-                .text("确认等待（秒）"),
-        );
+        ui.heading("金色齿轮识别");
+        ui.label("齿轮存在时持续监听，声音命中后立即起杆。识别范围与声音阈值在诊断页调整。");
         ui.add(
             egui::Slider::new(&mut self.config.vision.icon_threshold, 0.5..=0.99).text("图标阈值"),
         );
-        if self.button(ui, "保存画面设置") {
-            let vision = self.config.vision.clone();
+        if self.button(ui, "保存识别设置") {
+            let threshold = self.config.vision.icon_threshold;
             let result = self.save(|cfg| {
-                cfg.vision.confirm_bite = vision.confirm_bite;
-                cfg.vision.motion_threshold = vision.motion_threshold;
-                cfg.vision.confirm_window_s = vision.confirm_window_s;
-                cfg.vision.icon_threshold = vision.icon_threshold;
+                cfg.vision.icon_threshold = threshold;
             });
             self.feedback(result);
         }
@@ -633,10 +621,8 @@ impl App {
                 .num_columns(2)
                 .show(ui, |ui| {
                     for (label, value) in [
-                        ("寻找图标超时（秒）", &mut self.config.run.icon_timeout_s),
-                        ("一竿超时（秒）", &mut self.config.run.cast_timeout_s),
-                        ("收杆超时（秒）", &mut self.config.run.loot_timeout_s),
-                        ("连续消失确认（秒）", &mut self.config.run.loot_confirm_s),
+                        ("抛竿后齿轮等待（秒）", &mut self.config.run.icon_timeout_s),
+                        ("无咬钩声音重抛（秒）", &mut self.config.run.cast_timeout_s),
                         ("补饵等待（秒）", &mut self.config.run.lure_cast_s),
                         ("抛竿间隔下限（秒）", &mut self.config.run.pause_min_s),
                         ("抛竿间隔上限（秒）", &mut self.config.run.pause_max_s),
@@ -670,18 +656,6 @@ impl App {
                         ui.add(egui::DragValue::new(value).range(0.0..=1440.0).speed(0.1));
                         ui.end_row();
                     }
-                    ui.label("收杆反应下限（毫秒）");
-                    ui.add(
-                        egui::DragValue::new(&mut self.config.behavior.reaction_min_ms)
-                            .range(0..=10000),
-                    );
-                    ui.end_row();
-                    ui.label("收杆反应上限（毫秒）");
-                    ui.add(
-                        egui::DragValue::new(&mut self.config.behavior.reaction_max_ms)
-                            .range(0..=10000),
-                    );
-                    ui.end_row();
                     ui.label("按键时长抖动（毫秒）");
                     ui.add(
                         egui::DragValue::new(&mut self.config.behavior.key_hold_jitter_ms)
@@ -689,10 +663,6 @@ impl App {
                     );
                     ui.end_row();
                 });
-            ui.add(
-                egui::Slider::new(&mut self.config.behavior.skip_bite_chance, 0.0..=0.99)
-                    .text("跳过咬钩概率"),
-            );
             ui.add(
                 egui::Slider::new(&mut self.config.behavior.jump_chance, 0.0..=1.0)
                     .text("抛竿前跳跃概率"),
@@ -824,7 +794,7 @@ impl App {
         self.score_graph(ui);
         ui.add(
             egui::Slider::new(&mut self.config.audio.bite_threshold, 0.1..=0.99)
-                .text("水花触发阈值"),
+                .text("咬钩声音触发阈值"),
         );
         ui.horizontal_wrapped(|ui| {
             if self.button(ui, "保存阈值") {
@@ -877,7 +847,7 @@ impl App {
         });
         if let Some(report) = &self.report {
             ui.label(format!(
-                "录音 {:.1} 秒，清晰水花 {} 次，背景最高得分 {:.2}",
+                "录音 {:.1} 秒，清晰咬钩声音 {} 次，背景最高得分 {:.2}",
                 report.duration_s,
                 report.bites.len(),
                 report.floor

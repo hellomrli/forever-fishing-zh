@@ -49,13 +49,6 @@ class BiteHeard(Event):
 
 
 @dataclass(frozen=True)
-class BiteRejected(Event):
-    score: float
-    change: float = 0.0  # the strongest change seen near the bobber around the splash
-    needed: float = 0.0  # the bar it had to reach; 0 when nothing had been measured yet
-
-
-@dataclass(frozen=True)
 class AudioOpened(Event):
     name: str
     fallback: str = ""

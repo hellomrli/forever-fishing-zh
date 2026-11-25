@@ -37,9 +37,6 @@ settings!(Vision {
     icon_native_size: u32 = 0,
     icon_threshold: f32 = 0.75,
     match_width: u32 = 1920,
-    confirm_bite: bool = true,
-    confirm_window_s: f64 = 0.6,
-    motion_threshold: f32 = 8.0,
     search_left: f32 = 0.0,
     search_top: f32 = 0.0,
     search_right: f32 = 1.0,
@@ -55,22 +52,17 @@ settings!(Audio {
 settings!(Run {
     icon_timeout_s: f64 = 4.0,
     cast_timeout_s: f64 = 30.0,
-    loot_timeout_s: f64 = 3.0,
     pause_min_s: f64 = 0.5,
     pause_max_s: f64 = 2.0,
     key_hold_ms: u32 = 60,
     lure_cast_s: f64 = 6.0,
     tick_interval_s: f64 = 0.02,
-    loot_confirm_s: f64 = 0.4,
 });
 settings!(Behavior {
     break_every_min_minutes: f64 = 0.0,
     break_every_max_minutes: f64 = 0.0,
     break_min_minutes: f64 = 0.0,
     break_max_minutes: f64 = 0.0,
-    reaction_min_ms: u32 = 0,
-    reaction_max_ms: u32 = 0,
-    skip_bite_chance: f64 = 0.0,
     key_hold_jitter_ms: u32 = 0,
     jump_chance: f64 = 0.0,
     jump_key: String = "space".into(),
@@ -198,14 +190,6 @@ impl Config {
             "水面范围必须在 0–1 内，且左上角在右下角之前"
         );
         ensure!(
-            v.confirm_window_s > 0.0 && v.confirm_window_s <= 2.0,
-            "画面确认等待必须在 (0, 2] 秒内"
-        );
-        ensure!(
-            v.motion_threshold > 0.0 && v.motion_threshold <= 255.0,
-            "画面变化阈值必须在 (0, 255] 内"
-        );
-        ensure!(
             a.capture == "game" || a.capture == "device",
             "声音来源必须是 game 或 device"
         );
@@ -214,10 +198,8 @@ impl Config {
             "水花阈值必须在 (0, 1] 内"
         );
         ensure!(a.refractory_s >= 0.0, "水花间隔不能小于 0");
-        ensure!(
-            r.icon_timeout_s > 0.0 && r.cast_timeout_s > 0.0 && r.loot_timeout_s > 0.0,
-            "等待超时必须大于 0"
-        );
+        ensure!(r.icon_timeout_s > 0.0, "抛竿后等待齿轮出现的时间必须大于 0");
+        ensure!(r.cast_timeout_s > 0.0, "无咬钩声音重抛时间必须大于 0");
         ensure!(
             r.pause_min_s >= 0.0 && r.pause_min_s <= r.pause_max_s,
             "抛竿间隔范围无效"
@@ -228,24 +210,16 @@ impl Config {
             "状态检查间隔必须在 0.005–0.2 秒内"
         );
         ensure!(
-            r.loot_confirm_s > 0.0 && r.loot_confirm_s < r.loot_timeout_s,
-            "收杆确认时间必须小于拾取超时"
-        );
-        ensure!(
             (10..=500).contains(&r.key_hold_ms),
             "按键时长必须在 10–500 毫秒内"
         );
         for (lo, hi) in [
             (b.break_every_min_minutes, b.break_every_max_minutes),
             (b.break_min_minutes, b.break_max_minutes),
-            (b.reaction_min_ms as f64, b.reaction_max_ms as f64),
         ] {
             ensure!(lo >= 0.0 && lo <= hi, "可选行为的时间范围无效");
         }
-        ensure!(
-            (0.0..1.0).contains(&b.skip_bite_chance) && (0.0..=1.0).contains(&b.jump_chance),
-            "可选行为概率无效"
-        );
+        ensure!((0.0..=1.0).contains(&b.jump_chance), "可选行为概率无效");
         ensure!(
             b.key_hold_jitter_ms <= r.key_hold_ms - 10,
             "按键抖动必须保留至少 10 毫秒"
@@ -413,8 +387,8 @@ mod tests {
             "[game]\ncast_key='F8'",
             "[audio]\nbite_threshold=nan",
             "[vision]\nsearch_left=0.8\nsearch_right=0.5",
-            "[run]\nloot_confirm_s=3.0",
-            "[behavior]\nreaction_min_ms=100\nreaction_max_ms=10",
+            "[run]\nicon_timeout_s=0.0",
+            "[behavior]\nbreak_min_minutes=100\nbreak_max_minutes=10",
         ] {
             assert!(Config::parse(text).is_err(), "{text}");
         }

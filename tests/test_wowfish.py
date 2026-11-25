@@ -483,7 +483,7 @@ def _fish(
     pond = pond or _Pond()
     cfg = Config(
         game=game or GameConfig(),
-        vision=VisionConfig(confirm_bite=False),
+        vision=VisionConfig(),
         audio=AudioConfig(),
         behavior=behavior,
     )
@@ -502,8 +502,6 @@ def test_fishing_loop_varies_its_rhythm_only_when_asked():
     pressed, and each cast first drops the audio buffered while waiting, so the splash is heard
     when it happens. Each [behavior] setting, once filled in, shows in the presses:
     - breaks: after the fishing stretch the loop rests for the whole break
-    - reaction: Interact waits out the reaction time after the splash
-    - skipped bites: some splashes get no Interact
     - key holds: they vary within the jitter
     - jumps: every cast follows a jump, once the character has landed
     """
@@ -517,9 +515,6 @@ def test_fishing_loop_varies_its_rhythm_only_when_asked():
         break_every_max_minutes=1,
         break_min_minutes=2,
         break_max_minutes=2,
-        reaction_min_ms=200,
-        reaction_max_ms=400,
-        skip_bite_chance=0.3,
         key_hold_jitter_ms=20,
         jump_chance=1,
     )
@@ -527,11 +522,7 @@ def test_fishing_loop_varies_its_rhythm_only_when_asked():
     gaps = [b[0] - a[0] for a, b in zip(pond.pressed, pond.pressed[1:], strict=False)]
     assert max(gaps) >= 120
     assert any("休息 2.0 分钟" in line for line in lines)
-    for t in (t for t, key, _ in pond.pressed if key == "f"):
-        heard = max(b for b in pond.bites if b <= t)
-        assert 0.2 - 1e-9 <= t - heard <= 0.4 + 1e-9
-    assert 0 < [k for _, k, _ in pond.pressed].count("f") < len(pond.bites)
-    assert any("已跳过本次咬钩" in line for line in lines)
+    assert [t for t, key, _ in pond.pressed if key == "f"] == pond.bites
     holds = {h for *_, h in pond.pressed}
     assert len(holds) > 1 and all(0.04 <= h <= 0.08 for h in holds)
     assert pond.pressed[0][1] == "space"

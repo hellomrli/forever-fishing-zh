@@ -3,7 +3,7 @@
 [game]
 # 动作条上的钓鱼技能键。
 cast_key = "1"
-# 游戏中“与目标互动”的按键。
+# 游戏中用于起杆拾取的“与目标互动”按键；声音命中后立即按下。
 interact_key = "f"
 # 会话时限（分钟）；0 表示不限时。
 session_minutes = 0
@@ -26,12 +26,6 @@ icon_native_size = 0
 icon_threshold = 0.75
 # 小图标自动保留足够分辨率，避免缩图后丢失细节。
 match_width = 1920
-# 同时检查自己浮漂附近的画面变化，减少其他玩家水花的干扰。
-confirm_bite = true
-# 听到水花后继续等待画面确认的时间（秒）。
-confirm_window_s = 0.6
-# 最低局部画面变化分数。
-motion_threshold = 8.0
 # 识别范围，使用窗口宽高比例；诊断页支持拖动框选。
 search_left = 0.0
 search_top = 0.0
@@ -49,17 +43,17 @@ refractory_s = 3.0
 fallback_to_device = true
 
 [run]
+# 实际抛竿后，等待金色齿轮出现的最长时间。至少保留 1.5 秒落水等待。
 icon_timeout_s = 4.0
+# 从实际抛竿完成起计时；这么多秒没有咬钩声音时重新抛竿，即使齿轮仍存在。
+# 开始或恢复时已有齿轮，从重新识别到齿轮起计时；起杆后重新计时。
 cast_timeout_s = 30.0
-loot_timeout_s = 3.0
 pause_min_s = 0.5
 pause_max_s = 2.0
 key_hold_ms = 60
 lure_cast_s = 6.0
 # 状态检查间隔（秒），可以被“停止”立即中断。
 tick_interval_s = 0.02
-# 收杆后图标连续消失的最短确认时间（秒），同时要求连续多帧。
-loot_confirm_s = 0.4
 
 [behavior]
 # 以下可选行为默认关闭。
@@ -67,9 +61,6 @@ break_every_min_minutes = 0.0
 break_every_max_minutes = 0.0
 break_min_minutes = 0.0
 break_max_minutes = 0.0
-reaction_min_ms = 0
-reaction_max_ms = 0
-skip_bite_chance = 0.0
 key_hold_jitter_ms = 0
 jump_chance = 0.0
 jump_key = "space"

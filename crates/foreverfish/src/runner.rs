@@ -3,7 +3,7 @@ use crate::{
     config::{Config, Store},
     engine::{Action, Engine, Observation, State, Stats},
     platform::{self, Window},
-    vision::{Calibration, Frame, IconMatch, Matcher, Motion, Region},
+    vision::{Calibration, Frame, IconMatch, Matcher, Region},
 };
 use anyhow::{Context, Result};
 use std::{
@@ -469,7 +469,7 @@ fn run_task(task: Task, cancel: &Cancel, paused: Arc<AtomicBool>, emit: Emit<'_>
                         send_scores(&result, emit);
                         for bite in result.bites {
                             emit(Event::Message(format!(
-                                "水花 {} 得分 {:.2}",
+                                "咬钩声音 {} 得分 {:.2}",
                                 bite.clip, bite.score
                             )));
                         }
@@ -652,9 +652,7 @@ fn fish(
 ) -> Result<()> {
     let mut detector = Detector::new(config.audio.bite_threshold, config.audio.refractory_s)?;
     let mut matcher = Matcher::new(config.vision.match_width)?;
-    let mut motion = Motion::new(config.vision.motion_threshold);
     let mut engine = Engine::new(config);
-    let mut before_cast = None;
     let start = Instant::now();
     let mut last_vision = f64::NEG_INFINITY;
     let mut last_snapshot = f64::NEG_INFINITY;
@@ -682,12 +680,13 @@ fn fish(
         // a bite already recognised from the newly opened stream.
         if batch.discontinuous {
             detector.reset();
-            motion.reset();
-            engine.reset_audio();
             heard = None;
         }
         for samples in batch.packets {
-            if engine.state == State::Waiting && !engine.manual_paused && observed.focused {
+            if matches!(engine.state, State::Waiting | State::Looting)
+                && !engine.manual_paused
+                && observed.focused
+            {
                 let result = detector.feed(&samples, cancel)?;
                 observed.bite = result.bites.first().cloned().or(observed.bite);
                 for frame in &result.frames {
@@ -703,61 +702,24 @@ fn fish(
         if observed.focused
             && !engine.manual_paused
             && engine.wants_vision(now)
-            && now - last_vision >= 0.1
-            && !observed.resized
+            && now - last_vision >= 0.25
+            && observed.bite.is_none()
+        // A recognised sound must reach the key without a scan.
         {
             last_vision = now;
             let frame = platform::capture(&window, Region::default())?;
             let allowed = Region::from_config(&engine.cfg.vision);
-            let region = engine
-                .icon
-                .map(|icon| {
-                    Region::around(
-                        icon.x,
-                        icon.y,
-                        frame.width(),
-                        frame.height(),
-                        (frame.width().max(frame.height()) as f32 * 0.1) as u32,
-                    )
-                    .intersection(allowed)
-                })
-                .unwrap_or(allowed);
             let mut found = IconMatch::none(engine.cfg.vision.icon_size_px.max(12));
             if engine.cfg.vision.icon_size_px > 0 {
-                found = matcher.find(&frame, engine.cfg.vision.icon_size_px, region, cancel)?;
-                if engine.state == State::Casting
-                    && found.accepted(engine.cfg.vision.icon_threshold)
-                    && before_cast
-                        .as_ref()
-                        .map(|before| {
-                            matcher.was_present(
-                                before,
-                                found,
-                                engine.cfg.vision.icon_threshold,
-                                cancel,
-                            )
-                        })
-                        .transpose()?
-                        .unwrap_or(false)
-                {
-                    found = IconMatch::none(found.size);
-                }
+                found = matcher.find(&frame, engine.cfg.vision.icon_size_px, allowed, cancel)?;
             }
-            if engine.state == State::Casting
-                && !found.accepted(engine.cfg.vision.icon_threshold)
-                && now - last_sweep >= 1.0
+            if !found.accepted(engine.cfg.vision.icon_threshold)
+                && (matches!(engine.state, State::Idle | State::Casting) || observed.resized)
+                && (observed.resized || now - last_sweep >= 1.0)
             {
                 last_sweep = now;
                 let cal = matcher.calibrate(&frame, allowed, cancel)?;
-                let was_present = cal.valid()
-                    && before_cast
-                        .as_ref()
-                        .map(|before| {
-                            matcher.was_present(before, cal.icon, cal.threshold(), cancel)
-                        })
-                        .transpose()?
-                        .unwrap_or(false);
-                if cal.valid() && !was_present {
+                if cal.valid() {
                     engine.cfg.vision.icon_size_px = cal.icon.size;
                     engine.cfg.vision.icon_native_size = cal.native_size;
                     engine.cfg.vision.icon_threshold = cal.threshold();
@@ -775,29 +737,15 @@ fn fish(
                 }
             }
             observed.icon = Some(found);
-            if let Some(icon) = engine.icon {
-                if engine.state == State::Waiting && engine.visual_confirmation_enabled() {
-                    let side = icon.size.max(16);
-                    let x0 = icon.x.saturating_sub(side * 2);
-                    let y0 = icon.y.saturating_sub(side);
-                    let x1 = (icon.x + side * 2).min(frame.width());
-                    let y1 = (icon.y + side * 4).min(frame.height());
-                    if x1 > x0 && y1 > y0 {
-                        let crop =
-                            image::imageops::crop_imm(&frame, x0, y0, x1 - x0, y1 - y0).to_image();
-                        motion.observe(&crop, start.elapsed().as_secs_f64());
-                    }
-                }
-            }
-            if found.accepted(engine.cfg.vision.icon_threshold) && engine.state == State::Casting {
+            if found.accepted(engine.cfg.vision.icon_threshold)
+                && matches!(engine.state, State::Idle | State::Casting)
+            {
                 emit(Event::Preview {
                     image: thumbnail(&frame),
                     icon: Some(scale_icon(found, frame.width())),
                 });
             }
         }
-        observed.visual_confirmed = motion.confirmed(start.elapsed().as_secs_f64());
-        observed.motion = motion.strongest(start.elapsed().as_secs_f64());
         // Recheck focus and manual pause after a potentially expensive calibration pass.
         observed.focused &= platform::focused(&window);
         engine.manual_paused = paused.load(Ordering::Acquire);
@@ -805,16 +753,6 @@ fn fish(
         let mut actions: VecDeque<_> = engine.tick(start.elapsed().as_secs_f64(), observed).into();
         while let Some(action) = actions.pop_front() {
             match action {
-                Action::CaptureBeforeCast => {
-                    before_cast = if !paused.load(Ordering::Acquire)
-                        && !cancel.is_cancelled()
-                        && platform::focused(&window)
-                    {
-                        Some(platform::capture(&window, Region::default())?)
-                    } else {
-                        None
-                    };
-                }
                 Action::Press { key, hold_ms } => {
                     let sent = !paused.load(Ordering::Acquire)
                         && platform::press(&window, &key, hold_ms, cancel)?;
@@ -827,25 +765,20 @@ fn fish(
                 }
                 Action::ResetDetection => {
                     detector.reset();
-                    motion.reset();
                     let _ = stream.drain()?;
-                    if engine.state != State::Casting {
-                        before_cast = None;
-                    }
                 }
                 Action::Message(message) | Action::Finished(message) => {
                     emit(Event::Message(message))
                 }
             }
         }
-        if previous == State::Casting && engine.state == State::Waiting {
+        if matches!(previous, State::Idle | State::Casting) && engine.state == State::Waiting {
             heard = None;
         }
         if previous == State::Waiting && engine.state == State::Resting {
-            // Tells a missed splash apart from a rejected one or a lost icon.
             emit(Event::Message(match heard {
                 Some((clip, score)) => format!(
-                    "本次等待未收杆：水花最高得分 {score:.2}（{}），阈值 {:.2}",
+                    "齿轮消失前未起杆：声音最高得分 {score:.2}（{}），阈值 {:.2}",
                     crate::assets::CLIPS[clip].0,
                     engine.cfg.audio.bite_threshold
                 ),

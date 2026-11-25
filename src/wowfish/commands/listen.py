@@ -33,10 +33,10 @@ def listen(
         0.0, "--seconds", min=0.0, help="试听时长；0 表示直到 Ctrl-C 或文件结束。"
     ),
     threshold: float | None = typer.Option(
-        None, "--threshold", min=0.001, max=1.0, help="临时使用这个水花阈值。"
+        None, "--threshold", min=0.001, max=1.0, help="临时使用这个咬钩声音阈值。"
     ),
 ) -> None:
-    """试听实际音频来源，显示音量、水花得分和咬钩事件。"""
+    """试听实际音频来源，显示音量、咬钩声音得分和咬钩事件。"""
     from wowfish.audio import AudioChunk, devices
     from wowfish.audio._file import WavFileSource
     from wowfish.audio._recording import RecordingSource

@@ -1,0 +1,77 @@
+{
+  "date": "2026-11-25",
+  "source": "working tree",
+  "branch": "rust-rewrite",
+  "base_commit": "da462010d8a4f41e66fcf08deb2686d83f7177b9",
+  "versions": {
+    "python": "1.1.0",
+    "rust": "2.0.0-alpha.3"
+  },
+  "environment": {
+    "os": "Linux",
+    "architecture": "x86_64",
+    "python": "3.12.16",
+    "rustc": "1.97.0 (2d8144b78 2026-07-07)",
+    "gui": "Xvfb"
+  },
+  "upstream": {
+    "repository": "rsamf/wow-fishing-forever",
+    "head_commit": "97653ba0566d2e1c14b70848888c76f674f7655e",
+    "reviewed_commit": "97653ba0566d2e1c14b70848888c76f674f7655e",
+    "status": "identical",
+    "new_commits": 0,
+    "report": "checks/upstream/upstream.json"
+  },
+  "tests": {
+    "python": {
+      "passed": 114,
+      "failed": 0,
+      "report": "checks/simple-fishing/python-tests.xml"
+    },
+    "rust_release": {
+      "passed": 44,
+      "failed": 0,
+      "fishing_loop": 18,
+      "report": "checks/simple-fishing/rust-tests.log"
+    }
+  },
+  "checks": {
+    "python_release_metadata": true,
+    "ruff_lint": true,
+    "ruff_format": true,
+    "rustfmt": true,
+    "clippy_linux_all_targets_deny_warnings": true,
+    "clippy_windows_msvc_all_targets_deny_warnings": true,
+    "linux_release_build": true,
+    "locked_dependency_sync": true,
+    "git_diff_whitespace": true
+  },
+  "gui": {
+    "window": [900, 640],
+    "font_scales": [100, 125, 150],
+    "pages": ["钓鱼", "设置", "校准与诊断"],
+    "python": {
+      "ok": true,
+      "screenshots": 3,
+      "report": "checks/simple-fishing/python-gui.json",
+      "readme_image": "docs/images/python-simple-fishing.png"
+    },
+    "rust": {
+      "ok": true,
+      "screenshots": 15,
+      "report": "checks/simple-fishing/rust-gui.json",
+      "readme_image": "docs/images/rust-simple-fishing.png"
+    }
+  },
+  "coverage": [
+    "Existing and moving gears, pause/resume, window resizing and old configuration preservation",
+    "Four bundled bite sounds to immediate key delivery, including 20 ms packets and icon flicker",
+    "30 s recast deadline during icon acquisition and listening, actual key delivery time, repeat bites and late screenshots",
+    "Sound priority over timeout and icon loss, session limits and estimated catch counting"
+  ],
+  "not_run_locally": [
+    "Rust 1.88 minimum compiler checks",
+    "Windows native executable linking, generated EXE smoke test and portable packaging",
+    "Actual audio devices, reconnection and Forever client fishing"
+  ]
+}

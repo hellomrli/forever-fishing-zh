@@ -1,4 +1,4 @@
-"""The Fish tab's Scores graph: each splash clip's score over the current cast, on a Tk canvas."""
+"""The most recent 30 seconds of bite-sound scores, on a Tk canvas."""
 
 from __future__ import annotations
 
@@ -32,17 +32,20 @@ class ScoreGraph:
         self._lh = self._font.metrics("linespace")
         self._trace: ScoreTrace | None = None
         self._span = 30.0
+        self._origin = 0.0
         self._key: tuple[int, int, float] | None = None
         self._box: tuple[float, float, float, float] | None = None  # plot x0, x1, y0, y1
         self.canvas.bind("<Configure>", lambda _e: self._redraw())
         self.canvas.bind("<Motion>", self._hover)
         self.canvas.bind("<Leave>", lambda _e: self.canvas.delete("hover"))
 
-    def show(self, trace: ScoreTrace, span_s: float) -> None:
-        """Draw `trace` over 0..span_s seconds since the bobber was found; no-op if unchanged."""
-        key = (id(trace), trace.version, span_s)
+    def show(self, trace: ScoreTrace) -> None:
+        """Keep scores visible even when a gear stays on screen for a long time."""
+        key = (id(trace), trace.version, self._span)
         if key != self._key:
-            self._trace, self._span, self._key = trace, max(span_s, 1.0), key
+            self._trace, self._key = trace, key
+            latest = trace.points[-1][0] if trace.points else trace.t0
+            self._origin = max(trace.t0, latest - self._span)
             self._redraw()
 
     # -- geometry ----------------------------------------------------------------------------
@@ -82,7 +85,7 @@ class ScoreGraph:
             x0, x1, y0, y1 = self._box
             c.create_text(
                 (x0 + x1) / 2, (y0 + y1) / 2, fill=MUTED, font=FONT, width=x1 - x0,
-                text="找到浮漂后显示水花匹配得分\n得分是匹配程度，并非成功概率",
+                text="找到齿轮后显示最近 30 秒的声音得分\n得分是匹配程度，并非成功概率",
             )  # fmt: skip
         if tr is not None:
             self._outcome(tr)  # under the lines, so the bite's own line stays visible
@@ -121,7 +124,8 @@ class ScoreGraph:
         """One clip's line; silent slices sit at 0 (they can't reach the threshold either)."""
         coords: list[float] = []
         for t, peaks in tr.points:
-            coords += [self._x(t - tr.t0), self._y(max(peaks.get(name, SILENT), 0.0))]
+            if t >= self._origin:
+                coords += [self._x(t - self._origin), self._y(max(peaks.get(name, SILENT), 0.0))]
         color = CLIP_COLORS[name]
         if len(coords) >= 4:
             self.canvas.create_line(*coords, fill=color, width=2)
@@ -143,19 +147,15 @@ class ScoreGraph:
     def _outcome(self, tr: ScoreTrace) -> None:
         assert self._box is not None
         x0, x1, y0, y1 = self._box
-        if tr.bite is not None:
+        if tr.bite is not None and tr.bite[0] >= self._origin:
             t, clip, score = tr.bite
-            x = self._x(t - tr.t0)
+            x = self._x(t - self._origin)
             self.canvas.create_line(x, y0, x, y1, fill=MUTED, dash=(2, 3))
             right = x > (x0 + x1) / 2  # keep the label inside the plot
             self.canvas.create_text(
                 x - GAP if right else x + GAP, y0, anchor="ne" if right else "nw",
-                text=f"水花 {score:.2f} {clip_label(clip)}", fill=TEXT, font=FONT,
+                text=f"声音 {score:.2f} {clip_label(clip)}", fill=TEXT, font=FONT,
             )  # fmt: skip
-        elif tr.timed_out:
-            self.canvas.create_text(
-                x1, y0, anchor="ne", fill=MUTED, font=FONT, text=f"{self._span:g} 秒内没有水花"
-            )
 
     # -- hover -------------------------------------------------------------------------------
 
@@ -170,8 +170,8 @@ class ScoreGraph:
         if not (x0 <= e.x <= x1 and y0 <= e.y <= y1):
             return
         t = (e.x - x0) / (x1 - x0) * self._span
-        pt, peaks = min(tr.points, key=lambda p: abs(p[0] - tr.t0 - t))
-        x = self._x(pt - tr.t0)
+        pt, peaks = min(tr.points, key=lambda p: abs(p[0] - self._origin - t))
+        x = self._x(pt - self._origin)
         c.create_line(x, y0, x, y1, fill=MUTED, dash=(2, 2), tags="hover")
         rows = sorted(peaks.items(), key=lambda kv: -kv[1])
         lines = [(None, f"{pt - tr.t0:.1f} s")] + [

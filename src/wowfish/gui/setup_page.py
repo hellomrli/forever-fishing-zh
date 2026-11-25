@@ -12,8 +12,6 @@ from wowfish.messages import error_text
 
 class SetupPage:
     def __init__(self, parent: Any, presenter: Presenter) -> None:
-        import tkinter as tk
-
         import ttkbootstrap as tb
 
         self.p = presenter
@@ -28,7 +26,7 @@ class SetupPage:
         game.columnconfigure(3, weight=1)
         g = presenter.cfg.game
         self.cast = self._entry(game, "抛竿键", g.cast_key, 0, 0)
-        self.interact = self._entry(game, "与目标互动键", g.interact_key, 0, 2)
+        self.interact = self._entry(game, "拾取 / 起杆键", g.interact_key, 0, 2)
         self.lure = self._entry(game, "鱼饵宏键（可留空）", g.lure_key, 1, 0)
         self.quit = self._entry(game, "退出宏键（可留空）", g.quit_key, 1, 2)
         self.minutes = self._entry(game, "钓鱼时限（分钟）", g.session_minutes, 2, 0)
@@ -55,26 +53,16 @@ class SetupPage:
         self.game_note = wrapped_label(game)
         self.game_note.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(6, 0))
 
-        vision = tb.Labelframe(f, text="咬钩确认", padding=12)
+        vision = tb.Labelframe(f, text="金色齿轮监控", padding=12)
         vision.pack(fill="x", pady=6)
-        self.confirm = tk.BooleanVar(value=presenter.cfg.vision.confirm_bite)
-        tb.Checkbutton(
-            vision,
-            text="结合自己的浮漂画面变化确认咬钩",
-            variable=self.confirm,
-            bootstyle="success-round-toggle",
-        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 8))
-        self.motion = self._entry(
-            vision, "画面变化阈值", presenter.cfg.vision.motion_threshold, 1, 0
-        )
-        self.confirm_window = self._entry(
-            vision, "声音后确认时间（秒）", presenter.cfg.vision.confirm_window_s, 1, 2
+        self.icon_threshold = self._entry(
+            vision, "图标匹配阈值", presenter.cfg.vision.icon_threshold, 0, 0
         )
         wrapped_label(
             vision,
-            "开启后，听到水花还会核对浮漂附近的画面变化，减少旁人水花导致的误收杆。"
-            "持续漏掉咬钩时，可先缩小识别范围、降低画面阈值，再用录音验证检查声音。"
-            "阈值越高，要求画面变化越明显。",
+            "金色齿轮不存在时抛竿，存在时等待；识别到咬钩声音立即按拾取 / 起杆键。"
+            "默认 30 秒没有咬钩声音就重新抛竿。"
+            "图标阈值越高，要求齿轮匹配越准确。识别范围、图标校准和声音阈值可在诊断页调整。",
             bootstyle="secondary",
         ).grid(row=2, column=0, columnspan=4, sticky="ew", pady=10)
         tb.Button(vision, text="保存识别设置", command=self._save_vision, bootstyle="success").grid(
@@ -131,9 +119,7 @@ class SetupPage:
     def _save_vision(self) -> None:
         try:
             self.p.save_vision_settings(
-                confirm_bite=self.confirm.get(),
-                motion_threshold=float(self.motion.get()),
-                confirm_window_s=float(self.confirm_window.get()),
+                icon_threshold=float(self.icon_threshold.get()),
             )
         except Exception as e:
             self.vision_note.configure(text=f"保存失败：{error_text(str(e))}", bootstyle="danger")
@@ -156,11 +142,9 @@ class SetupPage:
                 (self.pause_key, g.pause_hotkey.upper()),
                 (self.stop_key, g.stop_hotkey.upper()),
                 (self.title, g.window_title),
-                (self.motion, self.p.cfg.vision.motion_threshold),
-                (self.confirm_window, self.p.cfg.vision.confirm_window_s),
+                (self.icon_threshold, self.p.cfg.vision.icon_threshold),
             ):
                 set_entry(entry, value)
-            self.confirm.set(self.p.cfg.vision.confirm_bite)
             self.config_note.configure(
                 text=f"已恢复默认配置，原文件备份为：{backup}", bootstyle="success"
             )

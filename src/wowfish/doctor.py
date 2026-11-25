@@ -101,7 +101,7 @@ def probe_opencv() -> ProbeResult:
         "识别组件",
         "ok",
         f"OpenCV {cv2.__version__}；{len(load_icon_templates())} 张图标，"
-        f"{len(build_fingerprints())} 段水花音频",
+        f"{len(build_fingerprints())} 段咬钩声音音频",
     )
 
 

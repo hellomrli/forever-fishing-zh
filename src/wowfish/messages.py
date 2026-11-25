@@ -1,17 +1,17 @@
 """Chinese product text and structured engine messages shared by GUI and CLI."""
 
 STATE_NAMES = {
-    "IDLE": "待机",
-    "CASTING": "寻找浮漂",
-    "WAIT_BITE": "等待咬钩",
-    "INTERACT": "确认收杆",
+    "IDLE": "检查金色齿轮",
+    "CASTING": "寻找金色齿轮",
+    "WAIT_BITE": "等待咬钩声音",
+    "INTERACT": "起杆后继续监听",
     "PAUSED": "已暂停",
     "STOPPED": "已停止",
 }
 CLIP_LABELS = {
-    "fishingbobber_1": "水花 1",
-    "fishingbobber_2": "水花 2",
-    "fishingbobber_3": "水花 3",
+    "fishingbobber_1": "咬钩音 1",
+    "fishingbobber_2": "咬钩音 2",
+    "fishingbobber_3": "咬钩音 3",
     "fishbite": "咬钩",
 }
 TEXT = {
@@ -20,19 +20,13 @@ TEXT = {
     "cast": "已按 {key} 抛竿",
     "seek": "等待浮漂落水后寻找金色齿轮，最多等待 {seconds:g} 秒",
     "found": "已找到浮漂，位置 ({x}, {y})",
-    "wait_bite": "等待水花和浮漂变化，确认后按 {key} 收杆",
-    "interact": "已确认水花（{score:.2f}），按 {key} 收杆",
-    "loot": "等待图标连续消失，确认收杆结果",
+    "wait_bite": "金色齿轮存在，等待咬钩声音；声音命中立即按 {key} 起杆",
+    "interact": "听到咬钩声音（{score:.2f}），已立即按 {key} 起杆",
+    "loot": "齿轮存在时继续监听，消失后进入下一竿",
     "caught": "图标已连续消失，收杆确认完成",
     "no_icon": "未找到交互图标；检查游戏设置和浮漂距离",
     "lost_icon": "浮漂图标持续丢失，准备重新抛竿",
-    "no_bite": "本次抛竿未确认咬钩",
-    "no_loot": "收杆后图标仍存在，准备重新抛竿",
-    "skip": "已跳过本次咬钩",
-    "visual_off": (
-        "画面确认已连续 {casts} 竿拦下水花且没有收杆，本次运行改为听到水花就收杆；"
-        "可在设置中调低画面变化阈值，或关闭画面确认"
-    ),
+    "no_bite": "{seconds:g} 秒内没有识别到咬钩声音，重新抛竿",
     "lure": "已按 {key} 使用鱼饵",
     "lure_wait": "等待 {seconds:g} 秒后抛竿，每 {minutes:g} 分钟补饵",
     "recast": "将在 {seconds:.1f} 秒后重新抛竿",
@@ -43,10 +37,9 @@ TEXT = {
     "quit_wait": "等待游戏窗口关闭，最多 {seconds:g} 秒",
     "closed": "游戏窗口已关闭",
     "stopping": "正在停止",
-    "resized": "游戏窗口尺寸或缩放发生变化，重新获取浮漂",
     "stats": (
         "抛竿 {casts} · 收杆确认（估计）{catches} · 超时/漏检 {misses} · "
-        "水花识别 {bites} · {minutes:02d}:{seconds:02d}"
+        "声音识别 {bites} · {minutes:02d}:{seconds:02d}"
     ),
 }
 

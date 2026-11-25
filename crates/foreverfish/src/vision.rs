@@ -7,7 +7,7 @@ use image::{
 use serde::Serialize;
 use std::{
     cmp::{Ordering, Reverse},
-    collections::{BTreeMap, BinaryHeap, VecDeque},
+    collections::{BTreeMap, BinaryHeap},
 };
 
 pub type Frame = RgbImage;
@@ -342,34 +342,6 @@ impl Matcher {
         Ok(best)
     }
 
-    /// Compare the same-sized candidate against the frame taken before the cast.
-    pub fn was_present(
-        &mut self,
-        before: &Frame,
-        candidate: IconMatch,
-        threshold: f32,
-        cancel: &Cancel,
-    ) -> Result<bool> {
-        let (width, height) = before.dimensions();
-        if width == 0 || height == 0 {
-            return Ok(false);
-        }
-        let region = Region::around(
-            candidate.x,
-            candidate.y,
-            width,
-            height,
-            candidate.size.max(12) * 2,
-        );
-        let previous = self.find(before, candidate.size, region, cancel)?;
-        Ok(previous.accepted(threshold)
-            && previous
-                .x
-                .abs_diff(candidate.x)
-                .max(previous.y.abs_diff(candidate.y))
-                <= candidate.size)
-    }
-
     pub fn calibrate(
         &mut self,
         frame: &Frame,
@@ -440,71 +412,6 @@ impl Calibration {
     }
 }
 
-pub struct Motion {
-    threshold: f32,
-    previous: Option<GrayImage>,
-    baseline: VecDeque<f32>,
-    changes: VecDeque<(f64, f32, f32)>,
-}
-
-impl Motion {
-    pub fn new(threshold: f32) -> Self {
-        Self {
-            threshold,
-            previous: None,
-            baseline: VecDeque::new(),
-            changes: VecDeque::new(),
-        }
-    }
-    pub fn reset(&mut self) {
-        self.previous = None;
-        self.baseline.clear();
-        self.changes.clear();
-    }
-    pub fn observe(&mut self, frame: &Frame, now: f64) -> f32 {
-        let gray = image::DynamicImage::ImageRgb8(frame.clone()).into_luma8();
-        let gray = imageops::resize(&gray, 64, 64, FilterType::Triangle);
-        let Some(previous) = self.previous.replace(gray.clone()) else {
-            return 0.0;
-        };
-        let mut changes: Vec<f32> = gray
-            .as_raw()
-            .iter()
-            .zip(previous.as_raw())
-            .map(|(a, b)| a.abs_diff(*b) as f32)
-            .collect();
-        let at = (changes.len() as f32 * 0.95) as usize;
-        changes.select_nth_unstable_by(at, f32::total_cmp);
-        let change = changes[at];
-        let mut baseline: Vec<_> = self.baseline.iter().copied().collect();
-        baseline.sort_by(f32::total_cmp);
-        let background = baseline.get(baseline.len() / 2).copied().unwrap_or(0.0);
-        self.changes
-            .push_back((now, change, self.threshold.max(background * 2.5 + 3.0)));
-        self.baseline.push_back(change);
-        if self.baseline.len() > 30 {
-            self.baseline.pop_front();
-        }
-        while self.changes.front().is_some_and(|(t, _, _)| now - t > 1.5) {
-            self.changes.pop_front();
-        }
-        change
-    }
-    /// Strongest recent change and the bar it had to reach, for the rejection message.
-    pub fn strongest(&self, now: f64) -> Option<(f32, f32)> {
-        self.changes
-            .iter()
-            .filter(|(t, _, _)| now >= *t && now - t <= 1.5)
-            .map(|&(_, value, bar)| (value, bar))
-            .max_by(|a, b| (a.0 / a.1).total_cmp(&(b.0 / b.1)))
-    }
-    pub fn confirmed(&self, now: f64) -> bool {
-        self.changes
-            .iter()
-            .any(|(t, value, bar)| now >= *t && now - t <= 1.5 && value >= bar)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,22 +441,6 @@ mod tests {
             assert!(found.accepted(0.99), "{size}: {found:?}");
             assert!(found.x.abs_diff(80 + size / 2) <= 1 && found.y.abs_diff(60 + size / 2) <= 1);
         }
-    }
-
-    #[test]
-    fn precast_check_rejects_an_existing_gear_and_accepts_a_new_location() {
-        let cancel = Cancel::default();
-        let mut matcher = Matcher::new(1920).unwrap();
-        let before = scene(29, 70, 60);
-        let old = matcher
-            .find(&before, 29, Region::default(), &cancel)
-            .unwrap();
-        assert!(matcher.was_present(&before, old, 0.75, &cancel).unwrap());
-        let after = scene(29, 220, 140);
-        let new = matcher
-            .find(&after, 29, Region::default(), &cancel)
-            .unwrap();
-        assert!(!matcher.was_present(&before, new, 0.75, &cancel).unwrap());
     }
 
     #[test]
@@ -588,24 +479,5 @@ mod tests {
         assert!(matcher
             .calibrate(&scene(26, 90, 65), Region::default(), &cancel)
             .is_err());
-    }
-
-    #[test]
-    fn motion_uses_local_changes_and_expires() {
-        let mut motion = Motion::new(8.0);
-        let a = Frame::from_pixel(64, 64, image::Rgb([80; 3]));
-        motion.observe(&a, 0.0);
-        motion.observe(&a, 0.1);
-        assert!(!motion.confirmed(0.1));
-        let b = Frame::from_fn(64, 64, |x, y| {
-            if x < 24 && y < 24 {
-                image::Rgb([180; 3])
-            } else {
-                image::Rgb([80; 3])
-            }
-        });
-        motion.observe(&b, 0.2);
-        assert!(motion.confirmed(0.2));
-        assert!(!motion.confirmed(2.0));
     }
 }

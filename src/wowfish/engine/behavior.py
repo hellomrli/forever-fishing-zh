@@ -26,16 +26,6 @@ class Behavior:
             return self._key_hold_ms / 1000.0
         return (self._key_hold_ms + self._rng.uniform(-jitter, jitter)) / 1000.0
 
-    def reaction_s(self) -> float:
-        """How long to wait between hearing the splash and pressing Interact."""
-        lo, hi = self.cfg.reaction_min_ms, self.cfg.reaction_max_ms
-        if hi <= 0:
-            return 0.0
-        return self._rng.uniform(lo, hi) / 1000.0
-
-    def skip_bite(self) -> bool:
-        return self._chance(self.cfg.skip_bite_chance)
-
     def jump(self) -> bool:
         return self._chance(self.cfg.jump_chance)
 

@@ -32,10 +32,8 @@ from wowfish.engine import events as ev
 from wowfish.engine.behavior import Behavior
 from wowfish.engine.state import State
 from wowfish.messages import msg
-from wowfish.vision.bite import VisualBiteVerifier
 from wowfish.vision.matcher import IconMatch
 from wowfish.vision.region import Region
-from wowfish.vision.search import IconSearch
 
 UNFOCUSED = msg("unfocused")
 THUMB_WIDTH = 480
@@ -45,15 +43,14 @@ STATS_EVERY_S = 10.0
 LISTEN_EVERY_S = 2.0  # while waiting for the splash, say what is heard this often
 SCORES_EVERY_S = 0.1  # ...and send each clip's peak score this often, for the GUI's graph
 SLEEP_SLICE_S = 0.1
-RESWEEP_AFTER_TIMEOUTS = 2  # icon timeouts in a row before the next cast measures the icon again
 JUMP_LANDING_S = (1.0, 1.5)  # Fishing cannot be cast mid-air; wait this long after a jump
 MEASURE_AFTER_S = 1.5  # Let the bobber land before matching or measuring its gear.
+ICON_LOST_S = 1.0  # Allow the 0.8 s audio fingerprint to arrive before acting on icon flicker.
+CALIBRATE_EVERY_S = 1.0
 QUIT_WAIT_S = 30.0  # away from an inn, /quit counts down 20 s before the game closes
 QUIT_TRIES = 3  # quit key presses before giving up on closing the game
-# Casts in a row that heard a splash, held it back on the picture alone and never reeled in.
-# After this many the picture check has cost more fish than it can save: reel in on sound.
-VISUAL_MISSES_BEFORE_BYPASS = 2
 BUSY = (State.CASTING, State.WAIT_BITE, State.INTERACT)  # a cast in hand
+LISTENING = (State.WAIT_BITE, State.INTERACT)
 
 
 class FishingEngine:
@@ -77,7 +74,6 @@ class FishingEngine:
         session_s: float | None = None,
         box_interval_s: float = 0.25,
         lost_after: int = 3,
-        bite_verifier: Any = None,
     ) -> None:
         self.cfg = cfg
         self.window = window
@@ -92,13 +88,10 @@ class FishingEngine:
         self._on_calibrated = on_calibrated or (lambda cal: None)
         self._find_window = find_window
         self.threshold = cfg.vision.icon_threshold
-        # The saved size is a first guess; the sweep remeasures it after repeated timeouts.
+        # Try the saved size first, and remeasure only when it no longer matches.
         self.matcher = matcher if matcher is not None else None
         if self.matcher is None and cfg.vision.icon_size_px > 0:
             self.matcher = self._matcher_factory(cfg.vision.icon_size_px)
-        self.search = IconSearch(self.matcher, self.threshold) if self.matcher else None
-        self._sweeping = True
-        self._icon_timeouts = 0
         self._clock = clock
         self._sleep = sleep
         self._real_sleep = sleep is time.sleep
@@ -115,12 +108,9 @@ class FishingEngine:
         self.stats = ev.Stats(0.0)
         self.started: float | None = None
         self._stop = False
-        self._resume_state = State.IDLE
         self._t_cast = 0.0
-        self._before_cast: np.ndarray | None = None
-        self._t_interact = 0.0
+        self._listen_at = 0.0
         self._icon_xy: tuple[int, int] | None = None
-        self._icon_size = 0
         self._misses = 0
         self._last_box_grab = -math.inf
         self._last_audio: float | None = None
@@ -132,16 +122,10 @@ class FishingEngine:
         self._lure_at: float | None = None  # when the lure last finished applying
         self._last_window_refresh = -math.inf
         self._disappeared_since: float | None = None
-        self._last_visual = -math.inf
-        self._candidate: tuple[Any, float] | None = None
-        self.verifier = bite_verifier or (
-            VisualBiteVerifier(cfg.vision.motion_threshold) if cfg.vision.confirm_bite else None
-        )
-        self._bite_rejected = False  # this cast heard a splash the picture did not confirm
-        self._visual_misses = 0  # such casts in a row that ended without reeling in
         self._audio_retries = 0
         self._audio_stable_since: float | None = None
         self._last_acquire = -math.inf
+        self._last_calibrate = -math.inf
 
     # -- public ------------------------------------------------------------------------------
 
@@ -223,9 +207,9 @@ class FishingEngine:
         focused = self.input.is_game_focused(self.window)
         if focused is False or self.window.minimized or self._user_paused.is_set():
             if self.state is not State.PAUSED:
-                self._resume_state = self.state
-                self._before_cast = None
                 self.state = State.PAUSED
+                self._icon_xy = None
+                self.detector.reset()
                 reason = msg("user_pause") if self._user_paused.is_set() else UNFOCUSED
                 self._emit(ev.Paused(self._t(), reason))
             return True
@@ -236,18 +220,14 @@ class FishingEngine:
             self._drain_audio(now)
             return
         if self.state is State.PAUSED:
-            if self._resume_state in BUSY:
-                self.stats = replace(self.stats, misses=self.stats.misses + 1)
             self._icon_xy = None
-            self._candidate = None
             self.detector.reset()
             self.state = State.IDLE
             self._emit(ev.Resumed(self._t(), self.state))
 
         chunks = self._drain_audio(now)
         bites = []
-        if self.state is State.WAIT_BITE:
-            self._observe_bobber(now)
+        if self.state in LISTENING:
             for chunk in chunks:
                 bites.extend(self.detector.feed(chunk))
             self._note_scores()
@@ -257,13 +237,14 @@ class FishingEngine:
             self._cast(now)
         elif self.state is State.CASTING:
             self._acquire(now)
-        elif self.state is State.WAIT_BITE:
+        elif self.state in LISTENING:
             self._wait_bite(now, bites)
-        elif self.state is State.INTERACT:
-            self._after_interact(now)
         self._maybe_stats(now)
 
     def _cast(self, now: float) -> None:
+        # Starting, resuming, and finishing a rest all recheck presence before any cast key.
+        if self._check_icon(now):
+            return
         if self._lure_due(now):
             self._apply_lure()
             return  # still IDLE: the next step casts
@@ -272,25 +253,26 @@ class FishingEngine:
             if not self._wait(self._rng.uniform(*JUMP_LANDING_S), watch_focus=True):
                 return
             now = self._clock()
+            if self._check_icon(now):
+                return
+        self._send_cast()
+
+    def _send_cast(self) -> None:
+        """Deliver a new cast after absence or the explicit no-sound deadline."""
         key = self.cfg.game.cast_key
         clear = getattr(self.audio, "clear", None)
         if clear is not None:  # a pause, break, or jump left audio queued; hear this cast live
             clear()
-        # A gear already visible here may be a UI button or the previous cast's bobber.
-        # Keep the snapshot for the saved-size path as well as automatic calibration.
-        self._before_cast = self.capturer.grab()
         if not self._press(key, "cast"):
-            self._before_cast = None
             return
         self.stats = ev.Stats(
             self._t(), self.stats.casts + 1, self.stats.catches, self.stats.misses,
             self.stats.bites_heard, self._elapsed(),
         )  # fmt: skip
         self._t_cast = self._clock()
+        self._listen_at = self._t_cast
         self._last_acquire = -math.inf
-        if self.search is not None:
-            self.search.reset()
-        limit = self.cfg.run.icon_timeout_s
+        limit = max(MEASURE_AFTER_S, self.cfg.run.icon_timeout_s)
         self._change(
             State.CASTING,
             msg("cast", key=key),
@@ -298,76 +280,64 @@ class FishingEngine:
         )
 
     def _acquire(self, now: float) -> None:
-        if now - self._t_cast > self.cfg.run.icon_timeout_s:
-            self._emit(ev.Timeout(self._t(), "icon", self.cfg.run.icon_timeout_s))
-            self._icon_timeouts += 1
-            if self._icon_timeouts >= RESWEEP_AFTER_TIMEOUTS:
-                self._sweeping = True
-            self._visual_misses = 0
-            self._miss(msg("no_icon"))
-            return
         if now - self._t_cast < MEASURE_AFTER_S:
             return
-        if now - self._last_acquire < 0.1:
+        if self._recast_if_no_sound():
+            return
+        if now - self._last_acquire < self.box_interval_s:
             return
         self._last_acquire = now
+        if self._check_icon(now):
+            return
+        if self._recast_if_no_sound():
+            return
+        if self._clock() - self._t_cast >= self.cfg.run.icon_timeout_s:
+            self._emit(ev.Timeout(self._t(), "icon", self.cfg.run.icon_timeout_s))
+            self._miss(msg("no_icon"))
+
+    def _check_icon(self, now: float) -> bool:
+        """An existing gear means wait, including one visible before starting or resuming."""
         frame = self.capturer.grab()
+        match = self._match_icon(frame, now)
+        if self._stop or self._pause_if_needed():
+            return True
+        if match is not None:
+            self._found(frame, match)
+            return True
+        return False
+
+    def _match_icon(self, frame: np.ndarray, now: float) -> IconMatch | None:
         v = self.cfg.vision
         region = Region(v.search_left, v.search_top, v.search_right, v.search_bottom)
-        if self.search is not None:  # fast path: the saved or last measured size
+        if self.matcher is not None:
             m = self.matcher.match(frame, region)
-            if m.accepted(self.threshold) and not self._was_there_before_cast(m):
-                self._icon_timeouts = 0
-                self._sweeping = False
-                self._found(frame, m)
-                return
-        if self._sweeping or self.search is None:
+            if m.accepted(self.threshold):
+                return m
+        if (
+            self.matcher is None or self.state in (State.IDLE, State.CASTING)
+        ) and now - self._last_calibrate >= CALIBRATE_EVERY_S:
+            self._last_calibrate = now
             x0, y0, x1, y1 = region.to_box(frame.shape[1], frame.shape[0])
             cal = self._calibrate(frame[y0:y1, x0:x1], match_width=self.cfg.vision.match_width)
             cal = replace(cal, x=cal.x + x0, y=cal.y + y0)
-            measured = IconMatch(cal.score, cal.x, cal.y, cal.icon_size_px, cal.gold)
-            if cal.valid and not self._was_there_before_cast(measured, cal.suggested_threshold()):
+            if cal.valid and not self._stop and not self._user_paused.is_set():
                 self._use_calibration(cal)
-                self._icon_timeouts = 0
-                self._found(frame, measured)
-                return
-
-    def _was_there_before_cast(self, candidate: IconMatch, threshold: float | None = None) -> bool:
-        before = self._before_cast
-        if before is None:
-            return False
-        h, w = before.shape[:2]
-        radius = max(12, candidate.size) * 2
-        region = Region(
-            max(0.0, (candidate.x - radius) / w),
-            max(0.0, (candidate.y - radius) / h),
-            min(1.0, (candidate.x + radius) / w),
-            min(1.0, (candidate.y + radius) / h),
-        )
-        matcher = self._matcher_factory(candidate.size)
-        previous = matcher.match(before, region)
-        near = max(abs(previous.x - candidate.x), abs(previous.y - candidate.y)) <= candidate.size
-        return bool(near and previous.accepted(self.threshold if threshold is None else threshold))
+                return IconMatch(cal.score, cal.x, cal.y, cal.icon_size_px, cal.gold)
+        return None
 
     def _use_calibration(self, cal: Any) -> None:
         self.matcher = self._matcher_factory(cal.icon_size_px)
         self.threshold = cal.suggested_threshold()
-        self.search = IconSearch(self.matcher, self.threshold)
-        self._sweeping = False
         self._emit(ev.Calibrated(self._t(), int(cal.icon_size_px), float(cal.score)))
         self._on_calibrated(cal)
 
     def _found(self, frame: np.ndarray, m: Any) -> None:
-        self._before_cast = None
+        if self.state is not State.CASTING:
+            # A cast already in progress at start/resume has no known delivery timestamp.
+            self._listen_at = self._clock()
         self._icon_xy = (m.x, m.y)
-        self._icon_size = m.size
         self._misses = 0
         self._disappeared_since = None
-        self._candidate = None
-        self._bite_rejected = False
-        if self.verifier is not None:
-            self.verifier.reset()
-        self._last_visual = -math.inf
         self._last_box_grab = self._clock()  # the full frame just confirmed it; look again later
         thumb, box = _thumbnail(frame, m.x, m.y, m.size)
         self._emit(ev.IconFound(self._t(), thumb, box, float(m.score), int(m.size), (m.x, m.y)))
@@ -388,62 +358,45 @@ class FishingEngine:
                 self.stats.bites_heard + 1, self._elapsed(),
             )  # fmt: skip
             self._emit(ev.BiteHeard(self._t(), bite.clip, float(bite.score)))
-            self._candidate = (bite, now + self.cfg.vision.confirm_window_s)
-        if self._candidate is not None:
-            bite, deadline = self._candidate
-            if self.verifier is not None and not self.verifier.confirmed(now):
-                if now >= deadline:
-                    self._candidate = None
-                    self._bite_rejected = True
-                    strongest = getattr(self.verifier, "strongest", None)
-                    change, needed = (strongest(now) if strongest else None) or (0.0, 0.0)
-                    self._emit(
-                        ev.BiteRejected(self._t(), float(bite.score), float(change), float(needed))
-                    )
-                # Keep checking icon loss and the cast timeout while awaiting confirmation.
-            else:
-                self._candidate = None
-                if self.verifier is not None:
-                    self._visual_misses = 0  # the picture check passed a bite: it works here
-                self._interact_bite(bite)
-                return
+            self._interact_bite(bite)
+            return
+        if self._recast_if_no_sound():
+            return
         seen = self._track(now)
-        if seen is False and self._misses >= self.lost_after:
-            self._emit(ev.IconLost(self._t()))
-            self._note_visual_miss()
-            self._miss(msg("lost_icon"))
+        if (
+            seen is False
+            and self._misses >= self.lost_after
+            and self._disappeared_since is not None
+            and now - self._disappeared_since >= ICON_LOST_S
+        ):
+            if self.state is State.INTERACT:
+                self.stats = replace(self.stats, catches=self.stats.catches + 1)
+                self._emit(ev.Caught(self._t()))
+                self._pause_then_idle(msg("caught"))
+            else:
+                self._emit(ev.IconLost(self._t()))
+                self._miss(msg("lost_icon"))
             return
-        if now - self._t_cast > self.cfg.run.cast_timeout_s:
-            clip, score = self._best_heard
-            detail = f"最高得分 {score:.2f}（{clip}）" if clip else "没有声音匹配"
-            self._emit(ev.Timeout(self._t(), "bite", self.cfg.run.cast_timeout_s, detail))
-            self._note_visual_miss()
-            self._miss(msg("no_bite"))
 
-    def _note_visual_miss(self) -> None:
-        """The cast ended without reeling in. If the picture check held back a splash on it,
-        count that, and stop letting the check veto once it has done so several casts running:
-        a bobber that goes unanswered every cast is worse than answering a neighbour's splash."""
-        if self.verifier is None:
-            return
-        if not self._bite_rejected and self._candidate is None:
-            self._visual_misses = 0
-            return
-        self._visual_misses += 1
-        if self._visual_misses >= VISUAL_MISSES_BEFORE_BYPASS:
-            self.verifier = None
-            self._emit(ev.Error(self._t(), msg("visual_off", casts=self._visual_misses)))
+    def _recast_if_no_sound(self) -> bool:
+        if self._clock() < self._listen_at + self.cfg.run.cast_timeout_s:
+            return False
+        clip, score = self._best_heard
+        detail = f"最高声音得分 {score:.2f}（{clip}）" if clip else "没有声音匹配"
+        self._emit(ev.Timeout(self._t(), "bite", self.cfg.run.cast_timeout_s, detail))
+        if self._time_up():
+            self._miss(msg("no_bite", seconds=self.cfg.run.cast_timeout_s))
+        else:
+            self.stats = replace(self.stats, misses=self.stats.misses + 1)
+            # This deadline overrides an old gear and any longer icon-acquisition timeout.
+            self._send_cast()
+        return True
 
     def _interact_bite(self, bite: Any) -> None:
-        if self.behavior.skip_bite():
-            self._miss(msg("skip"))
-            return
-        if not self._wait(self.behavior.reaction_s(), watch_focus=True):
-            return
         key = self.cfg.game.interact_key
         if not self._press(key, "bite"):
             return
-        self._t_interact = self._clock()
+        self._listen_at = self._clock()
         self._last_box_grab = -math.inf
         self._misses = 0
         self._disappeared_since = None
@@ -452,29 +405,6 @@ class FishingEngine:
             msg("interact", key=key, score=bite.score),
             msg("loot"),
         )
-
-    def _after_interact(self, now: float) -> None:
-        seen = self._track(now)
-        if seen is True:
-            self._disappeared_since = None
-        elif seen is False and self._disappeared_since is None:
-            self._disappeared_since = now
-        if (
-            seen is False
-            and self._misses >= self.lost_after
-            and self._disappeared_since is not None
-            and now - self._disappeared_since >= self.cfg.run.loot_confirm_s
-        ):
-            self.stats = ev.Stats(
-                self._t(), self.stats.casts, self.stats.catches + 1, self.stats.misses,
-                self.stats.bites_heard, self._elapsed(),
-            )  # fmt: skip
-            self._emit(ev.Caught(self._t()))
-            self._pause_then_idle(msg("caught"))
-            return
-        if now - self._t_interact > self.cfg.run.loot_timeout_s:
-            self._emit(ev.Timeout(self._t(), "loot", self.cfg.run.loot_timeout_s))
-            self._miss(msg("no_loot"))
 
     # -- lure --------------------------------------------------------------------------------
 
@@ -522,48 +452,30 @@ class FishingEngine:
             self.capturer.close()
             self.capturer.open(found)
         if resized:
-            self._sweeping = True
-            if self.state in BUSY:
-                self._miss(msg("resized"))
-
-    def _observe_bobber(self, now: float) -> None:
-        if self.verifier is None or self._icon_xy is None or now - self._last_visual < 0.1:
-            return
-        self._last_visual = now
-        x, y = self._icon_xy
-        side = max(16, self._icon_size)
-        x0, y0 = max(0, x - side * 2), max(0, y - side)
-        x1 = min(self.window.width, x + side * 2)
-        y1 = min(self.window.height, y + side * 4)
-        self.verifier.observe(self.capturer.grab((x0, y0, x1 - x0, y1 - y0)), now)
+            self.matcher = None
+            self._last_calibrate = self._last_box_grab = self._last_acquire = -math.inf
+            self._misses = 0
+            self._disappeared_since = None
 
     def _track(self, now: float) -> bool | None:
-        """Grab the box around the icon (at most every box_interval_s) and look for it there.
+        """Check the allowed region, so a gear that moves still keeps the current cast alive.
 
         True = seen, False = not seen (misses counted), None = not time to look yet.
         """
-        if now - self._last_box_grab < self.box_interval_s or self._icon_xy is None:
+        if now - self._last_box_grab < self.box_interval_s:
             return None
         self._last_box_grab = now
-        x, y = self._icon_xy
-        w, h = self.window.width, self.window.height
-        x0, y0, x1, y1 = Region.around(x, y, w, h, 0.10).to_box(w, h)
-        v = self.cfg.vision
-        rx0, ry0, rx1, ry1 = Region(
-            v.search_left, v.search_top, v.search_right, v.search_bottom
-        ).to_box(w, h)
-        x0, y0, x1, y1 = max(x0, rx0), max(y0, ry0), min(x1, rx1), min(y1, ry1)
-        if x1 <= x0 or y1 <= y0:
-            self._misses += 1
-            return False
-        box: Box = (x0, y0, x1 - x0, y1 - y0)
-        crop = self.capturer.grab(box)
-        m = self.matcher.match(crop, full_width=w)
-        if m.accepted(self.threshold):
-            self._icon_xy = (x0 + m.x, y0 + m.y)
+        m = self._match_icon(self.capturer.grab(), now)
+        if self._stop or self._pause_if_needed():
+            return None
+        if m is not None:
+            self._icon_xy = (m.x, m.y)
             self._misses = 0
+            self._disappeared_since = None
             return True
         self._misses += 1
+        if self._disappeared_since is None:
+            self._disappeared_since = now
         return False
 
     def _time_up(self) -> bool:
@@ -646,7 +558,6 @@ class FishingEngine:
             nxt = msg("recast", seconds=pause)
         self._change(State.IDLE, did, nxt)
         self._icon_xy = None
-        self._before_cast = None
         self._wait(rest + pause, watch_focus=True)
 
     def _wait(self, seconds: float, *, watch_focus: bool = False) -> bool:
@@ -699,7 +610,6 @@ class FishingEngine:
                     getattr(self.audio, "fallback_reason", ""),
                 )
             )
-            self._candidate = None
             self.detector.reset()
             return []
         if not len(samples):
@@ -732,7 +642,7 @@ class FishingEngine:
         self._emit(ev.Scores(self._t(), take(), self._bite_threshold()))
 
     def _maybe_stats(self, now: float) -> None:
-        if self.state is not State.WAIT_BITE:
+        if self.state not in LISTENING:
             return
         if now - self._last_listen >= LISTEN_EVERY_S:
             self._last_listen = now
@@ -750,7 +660,6 @@ class FishingEngine:
         self._emit(self.stats)
 
     def _finish(self, reason: str) -> None:
-        self._before_cast = None
         if self.state is State.STOPPED:
             return
         self._emit_stats()

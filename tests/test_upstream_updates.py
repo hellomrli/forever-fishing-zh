@@ -1,4 +1,4 @@
-"""Regressions for the upstream landing delay and process audio selection fixes."""
+"""Keep upstream landing and process audio fixes with the presence-based fishing loop."""
 
 from __future__ import annotations
 
@@ -6,7 +6,6 @@ import json
 from dataclasses import replace
 
 import numpy as np
-import pytest
 
 from wowfish.audio._pipewire import AppStream, list_app_streams, pick_stream
 from wowfish.capture import WindowRef
@@ -62,7 +61,7 @@ class CastScene:
 
 def fishing(scene, calibrate=None):
     cfg = Config(GameConfig(), VisionConfig(), AudioConfig())
-    cfg = replace(cfg, vision=replace(cfg.vision, icon_size_px=29, confirm_bite=False))
+    cfg = replace(cfg, vision=replace(cfg.vision, icon_size_px=29))
 
     def matcher(size):
         return IconMatcher(template_for_size(scene.templates, size))
@@ -82,65 +81,64 @@ def fishing(scene, calibrate=None):
     )
 
 
-def test_saved_size_waits_for_landing_and_rejects_a_gear_present_before_cast():
+def test_saved_size_accepts_a_gear_already_present_when_starting():
     scene = CastScene()
     scene.put_icon(70, 60)
     engine = fishing(scene)
-    engine._sweeping = False  # A previously measured size takes the fast matching path.
     engine._cast(scene.t)
-    scene.t = 0.2
-    engine._acquire(scene.t)
-    assert engine.state is State.CASTING
-    scene.t = 1.5
-    engine._acquire(scene.t)
-    assert engine.state is State.CASTING, "An unchanged UI gear must not become the bobber"
-
-    scene.frame = scene.water.copy()
-    scene.put_icon(220, 140)
-    scene.t = 1.7
-    engine._acquire(scene.t)
     assert engine.state is State.WAIT_BITE
-    assert abs(engine._icon_xy[0] - 234.5) <= 1
-    assert engine.stats.casts == 1 and scene.pressed == ["1"]
+    assert abs(engine._icon_xy[0] - 84.5) <= 1
+    assert engine.stats.casts == 0 and scene.pressed == []
 
 
-def test_calibration_waits_for_landing_and_releases_the_precast_frame():
+def test_calibration_can_check_startup_and_waits_for_landing_after_a_cast():
     scene = CastScene()
     calls = []
 
     def calibrate(frame, **kwargs):
         calls.append(scene.t)
-        return Calibration(29, 29, 0.95, 120, 100, 0.5, 0.4)
+        if scene.t < 1.5:
+            return Calibration(53, 53, 0.0, 120, 100)
+        return Calibration(53, 53, 0.95, 120, 100, 0.5, 0.4)
 
     engine = fishing(scene, calibrate)
     engine._cast(scene.t)
+    scene.put_icon(120, 100, size=53)
     scene.t = 1.4
     engine._acquire(scene.t)
-    assert calls == [] and engine.state is State.CASTING
+    assert calls == [0.0] and engine.state is State.CASTING
     scene.t = 1.5
     engine._acquire(scene.t)
-    assert calls == [1.5] and engine.state is State.WAIT_BITE
-    assert engine._before_cast is None
+    assert calls == [0.0, 1.5] and engine.state is State.WAIT_BITE
 
 
-def test_a_short_icon_timeout_still_expires_during_the_landing_wait():
+def test_a_short_icon_timeout_still_preserves_the_landing_wait():
     scene = CastScene()
-    engine = fishing(scene, lambda *args, **kwargs: pytest.fail("Calibration ran before landing"))
+    calls = []
+
+    def calibrate(frame, **kwargs):
+        calls.append(scene.t)
+        return Calibration(29, 29, 0.0, 120, 100)
+
+    engine = fishing(scene, calibrate)
     engine.cfg = replace(engine.cfg, run=replace(engine.cfg.run, icon_timeout_s=0.5))
     engine._cast(scene.t)
     scene.t = 0.6
     engine._acquire(scene.t)
+    assert engine.state is State.CASTING and calls == [0.0]
+    scene.t = 1.5
+    engine._acquire(scene.t)
     assert engine.state is State.IDLE and engine.stats.misses == 1
-    assert engine._before_cast is None
+    assert calls == [0.0, 1.5]
 
 
-def test_pausing_during_the_precast_screenshot_prevents_the_cast():
+def test_pausing_during_the_presence_check_prevents_the_cast():
     scene = CastScene()
     engine = fishing(scene)
     scene.on_grab = engine.pause
     engine._cast(scene.t)
     assert scene.pressed == [] and engine.stats.casts == 0
-    assert engine._before_cast is None
+    assert engine.state is State.PAUSED
 
 
 def test_native_pipewire_nodes_inherit_the_client_pid():
