@@ -1,10 +1,13 @@
 use super::*;
 use ::windows::{
-    core::{w, BOOL, PCWSTR},
+    core::{w, Owned, BOOL, PCWSTR, PWSTR},
     Win32::{
         Foundation::{HWND, LPARAM, POINT, RECT, WPARAM},
         Graphics::Gdi::*,
-        System::Threading::GetCurrentThreadId,
+        System::Threading::{
+            GetCurrentThreadId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        },
         UI::{
             HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2},
             Input::KeyboardAndMouse::*,
@@ -58,7 +61,39 @@ fn window_ref(handle: HWND) -> Result<Option<Window>> {
     }
 }
 
-pub fn windows(title: &str) -> Result<Vec<Window>> {
+fn client_executable(pid: u32) -> Option<String> {
+    unsafe {
+        let process = Owned::new(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?);
+        let mut path = vec![0u16; 32768];
+        let mut length = path.len() as u32;
+        QueryFullProcessImageNameW(
+            *process,
+            PROCESS_NAME_WIN32,
+            PWSTR(path.as_mut_ptr()),
+            &mut length,
+        )
+        .ok()?;
+        let name = path[..length as usize]
+            .rsplit(|&unit| unit == u16::from(b'\\'))
+            .next()?;
+        Some(String::from_utf16_lossy(name))
+    }
+}
+
+fn matches_client(window: &Window, custom_title: &str) -> bool {
+    let mut class = [0u16; 256];
+    let count = unsafe { GetClassNameW(hwnd(window), &mut class) };
+    count > 0
+        && client_executable(window.pid).is_some_and(|executable| {
+            is_client_identity(
+                &String::from_utf16_lossy(&class[..count as usize]),
+                &executable,
+                custom_title,
+            )
+        })
+}
+
+fn visible_windows() -> Result<Vec<Window>> {
     unsafe extern "system" fn enumerate(handle: HWND, data: LPARAM) -> BOOL {
         let found = &mut *(data.0 as *mut Vec<Window>);
         if IsWindowVisible(handle).as_bool() {
@@ -75,9 +110,16 @@ pub fn windows(title: &str) -> Result<Vec<Window>> {
             LPARAM(&mut found as *mut Vec<Window> as isize),
         )?;
     }
-    found.retain(|w| {
-        is_game_title(&w.title, title)
-            && !(w.pid == std::process::id() && w.title.starts_with("Forever 钓鱼助手"))
+    Ok(found)
+}
+
+pub fn windows(title: &str) -> Result<Vec<Window>> {
+    let mut found = visible_windows()?;
+    found.retain(|window| {
+        window.pid != std::process::id()
+            && !window.title.starts_with("Forever 钓鱼助手")
+            && is_game_title(&window.title, title)
+            && matches_client(window, title)
     });
     found.sort_by(|a, b| a.pid.cmp(&b.pid).then(a.handle.cmp(&b.handle)));
     Ok(found)
@@ -88,7 +130,14 @@ pub fn refresh(window: &Window) -> Result<Option<Window>> {
 }
 
 pub fn focused(window: &Window) -> bool {
-    unsafe { !IsIconic(hwnd(window)).as_bool() && GetForegroundWindow() == hwnd(window) }
+    unsafe {
+        let handle = hwnd(window);
+        let mut pid = 0;
+        GetForegroundWindow() == handle
+            && !IsIconic(handle).as_bool()
+            && GetWindowThreadProcessId(handle, Some(&mut pid)) != 0
+            && pid == window.pid
+    }
 }
 
 pub fn capture(window: &Window, region: Region) -> Result<Frame> {
@@ -349,10 +398,16 @@ pub fn native_smoke() -> Result<serde_json::Value> {
         let _window = TestWindow(handle);
         let original = window_ref(handle)?.context("无法创建自检窗口")?;
         ensure!(
-            windows("Rust 自检")?
+            visible_windows()?
                 .iter()
-                .any(|w| w.handle == original.handle && w.pid == original.pid),
+                .any(|w| w == &original && is_game_title(&w.title, "Rust 自检")),
             "中文窗口枚举失败"
+        );
+        ensure!(
+            !windows("Rust 自检")?
+                .iter()
+                .any(|w| w.handle == original.handle),
+            "助手自己的窗口不能作为钓鱼目标"
         );
         let first = capture(&original, Region::default())?;
         ensure!(

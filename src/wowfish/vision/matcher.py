@@ -17,6 +17,14 @@ GOLD_MIN = 0.12  # masked mean of (R - B) / 255; the gold sprite is ~0.3, the gr
 MIN_TEMPLATE_PX = 12
 
 
+def has_possible_gold(frame_bgr: np.ndarray) -> bool:
+    """A masked mean cannot be gold unless at least one pixel is warm enough."""
+    if not frame_bgr.size:
+        return False
+    warmth = cv2.subtract(frame_bgr[:, :, 2], frame_bgr[:, :, 0])
+    return int(warmth.max()) >= int(GOLD_MIN * 255)
+
+
 @dataclass(frozen=True)
 class IconMatch:
     score: float  # TM_CCOEFF_NORMED in [-1, 1]; NO_MATCH when the crop is too small
@@ -67,6 +75,8 @@ class IconMatcher:
             size = (max(1, round(crop.shape[1] * scale)), max(1, round(crop.shape[0] * scale)))
             crop = cv2.resize(crop, size, interpolation=cv2.INTER_AREA)
         if crop.shape[0] < tsize or crop.shape[1] < tsize:
+            return IconMatch(NO_MATCH, -1, -1, self.template.size, 0.0)
+        if not has_possible_gold(crop):
             return IconMatch(NO_MATCH, -1, -1, self.template.size, 0.0)
         t = self._template(tsize)
         result = cv2.matchTemplate(crop, t.bgr, cv2.TM_CCOEFF_NORMED, mask=t.mask)

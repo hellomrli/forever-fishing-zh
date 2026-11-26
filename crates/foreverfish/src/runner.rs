@@ -711,7 +711,8 @@ fn fish(
                 found = matcher.find(&frame, engine.cfg.vision.icon_size_px, allowed, cancel)?;
             }
             if !found.accepted(engine.cfg.vision.icon_threshold)
-                && (matches!(engine.state, State::Idle | State::Casting) || observed.resized)
+                && (matches!(engine.state, State::Idle | State::Jump | State::Casting)
+                    || observed.resized)
                 && (observed.resized || now - last_sweep >= 1.0)
             {
                 last_sweep = now;
@@ -735,7 +736,7 @@ fn fish(
             }
             observed.icon = Some(found);
             if found.accepted(engine.cfg.vision.icon_threshold)
-                && matches!(engine.state, State::Idle | State::Casting)
+                && matches!(engine.state, State::Idle | State::Jump | State::Casting)
             {
                 emit(Event::Preview {
                     image: thumbnail(&frame),
@@ -769,7 +770,9 @@ fn fish(
                 }
             }
         }
-        if matches!(previous, State::Idle | State::Casting) && engine.state == State::Waiting {
+        if matches!(previous, State::Idle | State::Jump | State::Casting)
+            && engine.state == State::Waiting
+        {
             heard = None;
         }
         if previous == State::Waiting && engine.state == State::Resting {

@@ -5,17 +5,17 @@
 
 面向 **World of Warcraft: Forever** 的中文桌面钓鱼工具。参考 [rsamf/wow-fishing-forever](https://github.com/rsamf/wow-fishing-forever)，通过金色齿轮识别和咬钩声音控制抛竿、起杆，提供中文界面、全局快捷键、手动识别范围、校准与音频诊断。
 
-当前版本为 **Python v1.1.1 / Rust 2.0.0-alpha.4**：金色齿轮不存在就抛竿，存在就等待；听到咬钩声音立即按拾取键起杆，**0.5 秒完成拾取后接着抛竿**；默认 **30 秒没有咬钩声音就重新抛竿**。规则和旧配置兼容见 [简化钓鱼设计](docs/简化钓鱼设计.md)。
+当前版本为 **Python v1.1.2 / Rust 2.0.0-alpha.5**：金色齿轮不存在就抛竿，存在就等待；听到咬钩声音立即按拾取键起杆，**0.5 秒完成拾取后接着抛竿**；默认 **30 秒没有咬钩声音就重新抛竿**。规则和旧配置兼容见 [简化钓鱼设计](docs/简化钓鱼设计.md)。
 
 通过屏幕图像、声音和模拟按键工作；无需 GPU。Windows 发布包包含 Python 运行环境，下载后直接运行。
 
 项目还提供 Rust 原生预览版，使用 egui 中文界面和原生 Windows 截图、按键及 WASAPI 音频接口。可执行程序内置中文字体、图标和音频素材，运行时无需 Python。构建与使用方法见 [Rust 使用说明](docs/Rust使用说明.md)。
 
-Windows 下载包已更新为 **Python v1.1.1 / Rust 2.0.0-alpha.4**，包含起杆后及时接着抛竿的修复。两版均通过原生 Windows 构建、生成 EXE 的自检与 SHA256 校验。
+本版修复前台状态无法确认时的输入和慢截图下的重抛计时，并加快 Python 齿轮跟踪。Rust 预览版修复浏览器误选、连续跳跃和设置保存失败时快捷键被替换的问题。见 [Python 修复说明](docs/releases/v1.1.2.md)与 [Rust 修复说明](docs/releases/rust-v2.0.0-alpha.5.md)。
 
 ## 下载与使用
 
-- **[下载 Windows 中文界面 EXE（v1.1.1）](https://github.com/hellomrli/forever-fishing-zh/releases/latest/download/ForeverFishing.exe)**
+- **[下载 Windows 中文界面 EXE（v1.1.2）](https://github.com/hellomrli/forever-fishing-zh/releases/download/v1.1.2/ForeverFishing.exe)**
 - [完整发布页](https://github.com/hellomrli/forever-fishing-zh/releases/latest)：GUI、可选命令行版、便携 ZIP、SHA256 校验值。
 - [Windows 使用说明](docs/Windows使用说明.md)
 
@@ -53,7 +53,7 @@ v1.0.1 进一步完善了暂停、音频任务切换和录音分析：补饵被�
 - [修复与验证记录](docs/修复与验证.md)：R01–R10 的对应改动、回归覆盖和验证边界。
 - [持续优化记录](docs/持续优化.md)：对照上游 v1.3.0 后的识别与音频改进、Rust / Python 行为对齐，以及每日上游变更检查。
 - [简化钓鱼设计](docs/简化钓鱼设计.md)：本版动作规则、30 秒兜底、旧配置兼容与验证范围。
-- [Windows 发布验证记录](docs/audit/release-validation-2026-11-26.json)：实际发布资产、源码提交、CI、原生 EXE 自检与下载校验。
+- [Windows 发布构建](https://github.com/hellomrli/forever-fishing-zh/actions/workflows/release.yml) 与 [Rust 原生构建](https://github.com/hellomrli/forever-fishing-zh/actions/workflows/rust.yml)：按标签查看生成 EXE 的自检；发布页提供源码提交和 SHA256 校验值。
 - CI 在 Linux 与 Windows 运行离线回归测试，并打开真实 Tk 界面测试 100%、125%、150% 字体缩放。
 - Windows 构建后会运行**生成的 EXE**，检查中文页面、配置、图片路径、全局快捷键、原生窗口移动 / 缩放 / 最小化恢复及截图。
 
@@ -86,7 +86,7 @@ uv run pyinstaller --clean --noconfirm packaging/wowfish.spec
 
 ## Rust 原生预览版
 
-Rust 2.0.0-alpha.4 Windows 预览包：[下载 GUI EXE](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.4/ForeverFishing-Rust.exe) · [下载便携 ZIP](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.4/ForeverFishing-Rust-v2.0.0-alpha.4-Windows-x64.zip) · [Rust 发布页](https://github.com/hellomrli/forever-fishing-zh/releases/tag/rust-v2.0.0-alpha.4)。预览包包含起杆后及时接着抛竿的修复，已通过 Windows 原生构建与生成 EXE 的自检。
+Rust 2.0.0-alpha.5 Windows 预览包：[下载 GUI EXE](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.5/ForeverFishing-Rust.exe) · [下载便携 ZIP](https://github.com/hellomrli/forever-fishing-zh/releases/download/rust-v2.0.0-alpha.5/ForeverFishing-Rust-v2.0.0-alpha.5-Windows-x64.zip) · [Rust 发布页](https://github.com/hellomrli/forever-fishing-zh/releases/tag/rust-v2.0.0-alpha.5)。
 
 需要 Rust 1.88+。Windows 10 / 11 64 位支持游戏窗口、截图、按键、全局快捷键及音频捕获；Linux 支持开发、中文界面和离线图像 / WAV 分析。
 
@@ -104,7 +104,7 @@ Windows 生成 `target/release/ForeverFishing-Rust.exe` 和 `ForeverFishing-Rust
 
 ![Rust 2.0.0-alpha.4 中文界面](docs/images/rust-windows-alpha.4-main.png)
 
-[Rust Native 工作流](.github/workflows/rust.yml)在 Linux / Windows 运行回归和数值对照测试，Windows 原生构建后执行生成 EXE 的界面自检，再生成预览包。自检覆盖 900×640 窗口、100% / 125% / 150% 字体缩放、设置与诊断页底部按钮。详见 [Rust 完善与验证记录](docs/Rust修复与验证.md)和 [2.0.0-alpha.4 修复说明](docs/releases/rust-v2.0.0-alpha.4.md)。
+[Rust Native 工作流](.github/workflows/rust.yml)在 Linux / Windows 运行回归和数值对照测试，Windows 原生构建后执行生成 EXE 的界面自检，再生成预览包。自检覆盖 900×640 窗口、100% / 125% / 150% 字体缩放、设置与诊断页底部按钮。详见 [Rust 完善与验证记录](docs/Rust修复与验证.md)和 [2.0.0-alpha.5 修复说明](docs/releases/rust-v2.0.0-alpha.5.md)。
 
 ## 来源与许可
 

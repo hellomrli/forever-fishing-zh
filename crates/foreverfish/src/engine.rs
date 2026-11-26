@@ -141,6 +141,7 @@ impl Engine {
                     && now < self.listen_at + self.cfg.run.cast_timeout_s
             }
             State::Idle => !self.recast_pending,
+            State::Jump => now >= self.deadline && !self.recast_pending,
             State::Waiting => now < self.listen_at + self.cfg.run.cast_timeout_s,
             State::Looting => now < self.deadline,
             _ => false,
@@ -263,7 +264,7 @@ impl Engine {
             self.disappeared = None;
         }
         match self.state {
-            State::Idle => {
+            State::Idle | State::Jump if self.state == State::Idle || now >= self.deadline => {
                 if !self.recast_pending {
                     let Some(icon) = observed.icon else {
                         return actions; // No screenshot yet: absence has not been established.
@@ -273,14 +274,17 @@ impl Engine {
                         return actions;
                     }
                 }
-                self.prepare_cast(now, &mut actions);
+                if self.state == State::Jump {
+                    self.cast(now, &mut actions);
+                } else {
+                    self.prepare_cast(now, &mut actions);
+                }
             }
             State::Lure if now >= self.deadline => {
                 self.lure_at = Some(now);
                 self.state = State::Idle;
                 actions.push(Action::Message("补饵等待完成".into()));
             }
-            State::Jump if now >= self.deadline => self.state = State::Idle,
             State::Casting => {
                 if now - self.cast_at >= MEASURE_AFTER_S {
                     if now >= self.listen_at + self.cfg.run.cast_timeout_s {

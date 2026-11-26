@@ -25,6 +25,7 @@ from wowfish.engine.engine import FishingEngine
 from wowfish.engine.state import State
 from wowfish.vision.calibrate import Calibration
 from wowfish.vision.matcher import IconMatcher
+from wowfish.vision.region import Region
 from wowfish.vision.template import load_icon_templates, template_for_size
 
 
@@ -37,6 +38,7 @@ class Pond:
         self.focused = True
         self.pressed = []
         self.captured = []
+        self.capture_delay = 0.0
         self.pending = np.zeros(0, np.float32)
         self.templates = load_icon_templates()
         self.water = np.full((240, 320, 3), (90, 60, 30), np.uint8)
@@ -51,6 +53,7 @@ class Pond:
     def grab(self, box=None):
         assert box is None, "Only gear presence is needed, without a splash crop"
         self.captured.append(self.t)
+        self.t += self.capture_delay
         return self.frame.copy()
 
     def is_game_focused(self, _window):
@@ -137,6 +140,41 @@ def test_existing_and_moving_gears_wait_until_the_no_sound_deadline():
     assert engine.state is State.CASTING and engine.stats.misses == engine.stats.casts == 1
 
 
+def test_tracking_tries_nearby_then_the_allowed_region_on_the_same_frame(monkeypatch):
+    pond = Pond()
+    pond.icon()
+    allowed = Region(0.2, 0.1, 0.85, 0.9)
+    vision = VisionConfig(
+        icon_size_px=29, search_left=0.2, search_top=0.1, search_right=0.85, search_bottom=0.9
+    )
+    engine = fishing(pond, cfg=Config(GameConfig(), vision, AudioConfig()))
+    regions = []
+    match = engine.matcher.match
+
+    def record_region(frame, region):
+        regions.append(region)
+        return match(frame, region)
+
+    monkeypatch.setattr(engine.matcher, "match", record_region)
+    engine.step()
+    assert regions == [allowed]
+    nearby = Region.around(*engine._icon_xy, 320, 240).intersection(allowed)
+    assert nearby.left == allowed.left and nearby != allowed
+    regions.clear()
+    step_at(engine, pond, 1.0)
+    assert regions == [nearby]
+    pond.icon(215, 130)
+    regions.clear()
+    step_at(engine, pond, 2.0)
+    assert regions == [nearby, allowed] and engine._icon_xy[0] > 215
+    assert engine._misses == 0 and engine.state is State.WAIT_BITE
+    pond.icon(5, 60)
+    regions.clear()
+    step_at(engine, pond, 3.0)
+    assert len(regions) == 2 and regions[-1] == allowed and engine._misses == 1
+    assert pond.captured == [0.0, 1.0, 2.0, 3.0] and pond.pressed == []
+
+
 @pytest.mark.parametrize("gear_lingers", [False, True])
 @pytest.mark.parametrize("pause_s", [None, 60.0])
 def test_reeling_continues_after_pickup_even_with_a_lingering_gear_or_old_pause(
@@ -200,6 +238,19 @@ def test_pickup_deadline_does_not_wait_for_another_screenshot():
     step_at(engine, pond, 5.5)
     assert pond.pressed == [(5.0, "f"), (5.5, "1")]
     assert engine.stats.misses == engine.stats.catches == 0
+
+
+def test_pickup_scan_crossing_the_deadline_casts_without_an_extra_tick():
+    pond = Pond()
+    pond.icon()
+    engine = fishing(pond)
+    engine.step()
+    pond.t = 5.0
+    engine._wait_bite(pond.t, [BiteEvent("fishbite", 0.9, 4.0)])
+    pond.capture_delay = 0.2
+    step_at(engine, pond, 5.4)
+    assert pond.pressed == [(5.0, "f"), (pytest.approx(5.6), "1")]
+    assert engine.state is State.CASTING and engine.stats.misses == 0
 
 
 def test_duplicate_sounds_during_pickup_cannot_delay_the_next_cast():
@@ -380,6 +431,60 @@ def test_resume_checks_presence_before_sending_any_cast(present):
     assert engine.stats.misses == 0
 
 
+def test_unknown_focus_pauses_until_the_game_is_confirmed_again():
+    pond = Pond()
+    pond.focused = None
+    engine = fishing(pond)
+    engine.step()
+    step_at(engine, pond, 1.0)
+    assert engine.state is State.PAUSED and pond.captured == [] and pond.pressed == []
+    pond.focused = True
+    pond.icon()
+    step_at(engine, pond, 2.0)
+    assert engine.state is State.WAIT_BITE and pond.captured == [2.0] and pond.pressed == []
+
+
+def test_unknown_focus_immediately_before_dispatch_cancels_the_cast():
+    pond = Pond()
+
+    def lose_focus():
+        pond.focused = None
+
+    pond.clear = lose_focus
+    engine = fishing(pond)
+    engine.step()
+    assert pond.captured == [0.0] and pond.pressed == [] and engine.stats.casts == 0
+    assert engine.state is State.PAUSED
+
+
+def test_session_limit_never_sends_the_quit_macro_without_confirmed_focus():
+    pond = Pond()
+    pond.focused = None
+    cfg = Config(GameConfig(session_minutes=1, quit_key="q"), VisionConfig(), AudioConfig())
+    engine = fishing(pond, cfg=cfg)
+    engine.step()
+    step_at(engine, pond, 60.0)
+    assert engine.state is State.STOPPED and pond.pressed == []
+
+
+@pytest.mark.parametrize("quit_key", ["", "q"])
+@pytest.mark.parametrize("slow_step", ["scan", "before_key"])
+def test_session_limit_crossed_before_a_new_cast_stops_instead(quit_key, slow_step):
+    pond = Pond()
+    pond.focused = False
+    cfg = Config(GameConfig(session_minutes=1, quit_key=quit_key), VisionConfig(), AudioConfig())
+    engine = fishing(pond, cfg=cfg)
+    engine.step()
+    pond.focused = True
+    if slow_step == "scan":
+        pond.capture_delay = 1.0
+    else:
+        pond.clear = lambda: pond.sleep(1.0)
+    step_at(engine, pond, 59.9)
+    assert pond.pressed == ([(pytest.approx(60.9), quit_key)] if quit_key else [])
+    assert engine.stats.casts == 0 and engine.state is State.STOPPED
+
+
 def test_legacy_visual_timing_and_skip_settings_cannot_delay_reeling(tmp_path):
     path = tmp_path / "旧配置.toml"
     legacy = (
@@ -431,6 +536,33 @@ def test_no_sound_deadline_applies_while_still_seeking_the_first_gear():
     assert pond.pressed == [(0.0, "1"), (30.0, "1")]
     assert pond.captured == captures, "The no-sound deadline must bypass icon acquisition"
     assert engine.stats.casts == 2 and engine.stats.misses == 1
+
+
+@pytest.mark.parametrize("acquiring", [False, True], ids=["losing-gear", "finding-gear"])
+def test_scan_crossing_no_sound_deadline_recasts_before_using_its_result(acquiring):
+    pond = Pond()
+    cfg = Config(
+        GameConfig(),
+        VisionConfig(icon_size_px=29),
+        AudioConfig(),
+        RunConfig(icon_timeout_s=60.0, pause_min_s=60.0, pause_max_s=60.0),
+    )
+    if not acquiring:
+        pond.icon()
+    engine = fishing(pond, cfg=cfg)
+    engine.step()
+    if acquiring:
+        pond.icon()
+    else:
+        pond.frame = pond.water.copy()
+        for at in (28.9, 29.17, 29.44, 29.71):
+            step_at(engine, pond, at)
+        assert pond.pressed == [] and engine.state is State.WAIT_BITE
+    pond.capture_delay = 0.12
+    step_at(engine, pond, 29.99)
+    expected = [(0.0, "1")] if acquiring else []
+    assert pond.pressed == [*expected, (pytest.approx(30.11), "1")]
+    assert engine.stats.misses == 1 and engine.state is State.CASTING
 
 
 def test_no_sound_deadline_uses_actual_cast_delivery_not_icon_acquisition():

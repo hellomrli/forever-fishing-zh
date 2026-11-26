@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from wowfish.vision.matcher import GOLD_MIN, NO_MATCH, IconMatch, IconMatcher
+from wowfish.vision.matcher import GOLD_MIN, NO_MATCH, IconMatch, IconMatcher, has_possible_gold
 from wowfish.vision.region import Region
 from wowfish.vision.template import IconTemplate, template_for_size
 
@@ -74,6 +74,10 @@ def calibrate_icon_scale(
     h, w = frame_bgr.shape[:2]
     sizes = list(sizes)
     pad = max(sizes) + 48
+    if cancel is not None and cancel():
+        raise InterruptedError("图标校准已取消")
+    if not has_possible_gold(frame_bgr):
+        return Calibration(0, 0, NO_MATCH, -1, -1)
 
     def run(side: int, region: Region | None = None) -> IconMatch:
         if cancel is not None and cancel():
@@ -90,7 +94,7 @@ def calibrate_icon_scale(
         if len(spots) == anchors:
             break
     if not spots:
-        spots = [(w // 2, h // 2)]
+        return Calibration(0, 0, NO_MATCH, -1, -1)
 
     best_side, best, best_key, best_region = sizes[0], None, -np.inf, None
     for ax, ay in spots:

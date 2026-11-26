@@ -79,6 +79,44 @@ fn starting_and_resuming_with_a_gear_does_not_cast_jump_or_apply_a_lure() {
 }
 
 #[test]
+fn landing_checks_for_a_gear_then_casts_without_rolling_another_jump() {
+    for gear_appears in [false, true] {
+        let mut engine = engine();
+        engine.cfg.behavior.jump_chance = 1.0;
+        assert_eq!(presses(&engine.tick(0.0, absent())), ["space"]);
+        engine.key_pressed(0.5);
+        assert!(!engine.wants_vision(1.49));
+        assert!(presses(&engine.tick(1.49, absent())).is_empty());
+        assert!(engine.wants_vision(2.01));
+        assert!(presses(&engine.tick(2.01, Observation::default())).is_empty());
+        let actions = engine.tick(2.02, if gear_appears { seen() } else { absent() });
+        if gear_appears {
+            assert!(presses(&actions).is_empty());
+            assert_eq!(engine.state, State::Waiting);
+        } else {
+            assert_eq!(presses(&actions), ["1"]);
+            assert_eq!(engine.state, State::Casting);
+        }
+    }
+}
+
+#[test]
+fn jump_after_pickup_does_not_wait_for_the_old_gear_or_another_jump() {
+    let mut engine = waiting();
+    engine.cfg.behavior.jump_chance = 1.0;
+    engine.tick(
+        5.0,
+        Observation {
+            bite: Some(bite()),
+            ..seen()
+        },
+    );
+    assert_eq!(presses(&engine.tick(5.5, seen())), ["space"]);
+    assert!(!engine.wants_vision(7.1));
+    assert_eq!(presses(&engine.tick(7.1, Observation::default())), ["1"]);
+}
+
+#[test]
 fn no_screenshot_does_not_mean_the_gear_is_absent() {
     let mut engine = engine();
     for now in [0.0, 5.0, 600.0] {

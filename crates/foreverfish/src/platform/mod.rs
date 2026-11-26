@@ -44,6 +44,36 @@ pub fn is_game_title(title: &str, custom: &str) -> bool {
     lower.contains("world of warcraft") || lower.contains("魔兽世界") || lower.contains("forever")
 }
 
+#[cfg(any(windows, test))]
+fn is_client_identity(class: &str, executable: &str, custom_title: &str) -> bool {
+    let class = class.to_ascii_lowercase();
+    let executable = executable.to_ascii_lowercase();
+    if class.is_empty()
+        || executable.is_empty()
+        || class.starts_with("chrome_widgetwin_")
+        || class == "mozillawindowclass"
+        || executable.starts_with("foreverfishing")
+        || matches!(
+            executable.as_str(),
+            "chrome.exe" | "msedge.exe" | "firefox.exe" | "brave.exe" | "opera.exe" | "vivaldi.exe"
+        )
+    {
+        return false;
+    }
+    !custom_title.trim().is_empty()
+        || class == "gxwindowclass"
+        || matches!(
+            executable.as_str(),
+            "wow.exe"
+                | "wow-64.exe"
+                | "wowclassic.exe"
+                | "wowclassic_t.exe"
+                | "wowt.exe"
+                | "wowb.exe"
+                | "wowclassicb.exe"
+        )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hotkey {
     Pause,
@@ -110,5 +140,26 @@ mod tests {
         }
         assert!(!is_game_title("记事本", ""));
         assert!(is_game_title("客户测试窗口", "测试"));
+    }
+
+    #[test]
+    fn title_matches_need_a_client_identity_and_exclude_browsers_and_helpers() {
+        for custom in ["", "Forever"] {
+            for (class, executable) in [
+                ("Chrome_WidgetWin_1", "msedge.exe"),
+                ("Chrome_WidgetWin_1", "renamed.exe"),
+                ("MozillaWindowClass", "browser.exe"),
+                ("custom", "CHROME.EXE"),
+                ("TkTopLevel", "ForeverFishing.exe"),
+                ("GxWindowClass", ""),
+                ("", "Wow.exe"),
+            ] {
+                assert!(!is_client_identity(class, executable, custom));
+            }
+        }
+        assert!(!is_client_identity("Notepad", "notepad.exe", ""));
+        assert!(is_client_identity("GxWindowClass", "renamed.exe", ""));
+        assert!(is_client_identity("custom", "WOW-64.EXE", ""));
+        assert!(is_client_identity("custom", "private-client.exe", "客户端"));
     }
 }

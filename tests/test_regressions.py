@@ -1058,6 +1058,46 @@ def test_manual_search_region_excludes_other_icons_and_persists_tracking():
         assert search.region.left >= region.left and search.region.right <= region.right
 
 
+def test_no_gold_skips_template_matching_and_the_calibration_probes(monkeypatch):
+    frame = np.full((240, 320, 3), (90, 60, 30), np.uint8)
+    templates = load_icon_templates()
+
+    def unexpected_match(*args, **kwargs):
+        pytest.fail("A frame without possible gold needs no template matches")
+
+    monkeypatch.setattr("wowfish.vision.matcher.cv2.matchTemplate", unexpected_match)
+    assert not IconMatcher(template_for_size(templates, 29)).match(frame).accepted(0.75)
+    monkeypatch.setattr(IconMatcher, "match", unexpected_match)
+    assert not calibrate_icon_scale(frame, templates).valid
+
+
+def test_calibration_without_a_gold_anchor_does_not_sweep_the_center(monkeypatch):
+    frame = np.full((100, 100, 3), (90, 60, 30), np.uint8)
+    frame[50, 50] = (0, 120, 255)
+    match = IconMatcher.match
+    probes = []
+
+    def record_probe(self, frame, region=None):
+        assert region is None, "A sweep needs a candidate from the full-frame probes"
+        probes.append(self.template.size)
+        return match(self, frame, region)
+
+    monkeypatch.setattr(IconMatcher, "match", record_probe)
+    result = calibrate_icon_scale(frame, load_icon_templates(), probe_sizes=(14, 29, 42))
+    assert probes == [14, 29, 42] and not result.valid
+
+
+def test_calibration_keeps_an_off_center_gold_gear_on_cold_water():
+    templates = load_icon_templates()
+    template = template_for_size(templates, 29)
+    frame = np.full((125, 180, 3), (90, 60, 30), np.uint8)
+    patch = frame[22:51, 130:159]
+    patch[template.mask > 0] = template.bgr[template.mask > 0]
+    result = calibrate_icon_scale(frame, templates, sizes=range(25, 34))
+    assert result.valid and result.icon_size_px == 29
+    assert abs(result.x - 144) <= 1 and abs(result.y - 36) <= 1
+
+
 def test_calibration_can_cancel_between_matches():
     frame = np.zeros((100, 100, 3), np.uint8)
     with pytest.raises(InterruptedError):

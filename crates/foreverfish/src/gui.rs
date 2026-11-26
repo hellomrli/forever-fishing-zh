@@ -1,6 +1,6 @@
 use crate::{
     audio::{Device, Report},
-    config::{Config, Store},
+    config::{Config, Game, Store},
     engine::{State, Stats},
     paths::Paths,
     platform::{self, Hotkey, Hotkeys, Window},
@@ -23,6 +23,7 @@ use std::{
 pub struct App {
     pub(crate) page: usize,
     pub(crate) config: Config,
+    game_draft: Game,
     pub(crate) config_error: Option<String>,
     store: Store,
     paths: Paths,
@@ -75,14 +76,21 @@ pub fn run(paths: Paths, config_path: Option<PathBuf>, smoke: Option<PathBuf>) -
     eframe::run_native(
         crate::TITLE,
         options,
-        Box::new(move |context| Ok(Box::new(App::new(context, paths, config_path, smoke)?))),
+        Box::new(move |context| {
+            Ok(Box::new(App::new(
+                &context.egui_ctx,
+                paths,
+                config_path,
+                smoke,
+            )?))
+        }),
     )
     .map_err(|error| anyhow::anyhow!("界面启动失败：{error}"))
 }
 
 impl App {
     fn new(
-        context: &eframe::CreationContext<'_>,
+        context: &egui::Context,
         paths: Paths,
         config_path: Option<PathBuf>,
         smoke: Option<PathBuf>,
@@ -99,9 +107,9 @@ impl App {
                 .or_default()
                 .insert(0, "Chinese".into());
         }
-        context.egui_ctx.set_fonts(fonts);
-        context.egui_ctx.set_visuals(egui::Visuals::dark());
-        let mut style = (*context.egui_ctx.style()).clone();
+        context.set_fonts(fonts);
+        context.set_visuals(egui::Visuals::dark());
+        let mut style = (*context.style()).clone();
         style.spacing.item_spacing = Vec2::new(10.0, 9.0);
         style.spacing.button_padding = Vec2::new(14.0, 7.0);
         style
@@ -113,7 +121,7 @@ impl App {
         style
             .text_styles
             .insert(egui::TextStyle::Heading, FontId::proportional(24.0));
-        context.egui_ctx.set_style(style);
+        context.set_style(style);
         let store = Store::new(config_path.unwrap_or_else(|| paths.config.clone()));
         store.ensure()?;
         let (config, config_error) = match store.load() {
@@ -132,6 +140,7 @@ impl App {
         );
         let mut app = Self {
             page: 0,
+            game_draft: config.game.clone(),
             config,
             config_error,
             store,
@@ -249,6 +258,7 @@ impl App {
         anyhow::ensure!(self.config_error.is_none(), "请先修复或恢复配置文件");
         let config = self.store.load()?;
         let window = self.require_window()?;
+        self.game_draft = config.game.clone();
         self.config = config.clone();
         self.manual_paused = false;
         self.stats = Stats::default();
@@ -267,6 +277,13 @@ impl App {
         self.config_error = None;
         self.message = "设置已保存，下次开始时生效".into();
         self.log(self.message.clone());
+        Ok(())
+    }
+    fn save_game_settings(&mut self) -> Result<()> {
+        let game = self.game_draft.clone();
+        self.save(|cfg| cfg.game = game)?;
+        self.register_hotkeys();
+        self.refresh_windows();
         Ok(())
     }
     fn button(&mut self, ui: &mut egui::Ui, label: &str) -> bool {
@@ -565,12 +582,12 @@ impl App {
             .spacing([24.0, 10.0])
             .show(ui, |ui| {
                 for (label, key) in [
-                    ("抛竿键", &mut self.config.game.cast_key),
-                    ("拾取 / 起杆键", &mut self.config.game.interact_key),
-                    ("补饵宏键（可留空）", &mut self.config.game.lure_key),
-                    ("退出宏键（可留空）", &mut self.config.game.quit_key),
-                    ("暂停 / 继续快捷键", &mut self.config.game.pause_hotkey),
-                    ("停止快捷键", &mut self.config.game.stop_hotkey),
+                    ("抛竿键", &mut self.game_draft.cast_key),
+                    ("拾取 / 起杆键", &mut self.game_draft.interact_key),
+                    ("补饵宏键（可留空）", &mut self.game_draft.lure_key),
+                    ("退出宏键（可留空）", &mut self.game_draft.quit_key),
+                    ("暂停 / 继续快捷键", &mut self.game_draft.pause_hotkey),
+                    ("停止快捷键", &mut self.game_draft.stop_hotkey),
                 ] {
                     ui.label(label);
                     ui.add(egui::TextEdit::singleline(key).desired_width(130.0));
@@ -578,29 +595,26 @@ impl App {
                 }
                 ui.label("会话时限（分钟，0 不限）");
                 ui.add(
-                    egui::DragValue::new(&mut self.config.game.session_minutes).range(0..=100000),
+                    egui::DragValue::new(&mut self.game_draft.session_minutes).range(0..=100000),
                 );
                 ui.end_row();
                 ui.label("补饵周期（分钟）");
                 ui.add(
-                    egui::DragValue::new(&mut self.config.game.lure_minutes)
+                    egui::DragValue::new(&mut self.game_draft.lure_minutes)
                         .range(0.1..=1440.0)
                         .speed(0.1),
                 );
                 ui.end_row();
                 ui.label("自定义窗口标题（可留空）");
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.config.game.window_title)
+                    egui::TextEdit::singleline(&mut self.game_draft.window_title)
                         .desired_width(310.0),
                 );
                 ui.end_row();
             });
         if self.button(ui, "保存游戏设置") {
-            let game = self.config.game.clone();
-            let result = self.save(|cfg| cfg.game = game);
+            let result = self.save_game_settings();
             self.feedback(result);
-            self.register_hotkeys();
-            self.refresh_windows();
         }
         ui.separator();
         ui.heading("金色齿轮识别");
@@ -697,13 +711,15 @@ impl App {
         if self.button(ui, "备份并恢复默认配置") {
             let result = self.store.recover().and_then(|backup| {
                 self.config = self.store.load()?;
+                self.game_draft = self.config.game.clone();
                 self.config_error = None;
                 self.message = format!("已恢复默认配置，原配置备份：{}", backup.display());
                 self.log(self.message.clone());
+                self.register_hotkeys();
+                self.refresh_windows();
                 Ok(())
             });
             self.feedback(result);
-            self.register_hotkeys();
         }
     }
 
@@ -1146,4 +1162,37 @@ fn texture(context: &egui::Context, name: &str, image: &Frame) -> TextureHandle 
 }
 fn fit(size: Vec2, max_width: f32, max_height: f32) -> Vec2 {
     size * (max_width / size.x).min(max_height / size.y).min(1.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_game_save_leaves_runtime_settings_and_hotkey_registration_untouched() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut app = App::new(
+            &egui::Context::default(),
+            Paths::in_root(directory.path()).unwrap(),
+            None,
+            Some(directory.path().join("smoke.json")),
+        )
+        .unwrap();
+        assert!(app.hotkeys.is_none());
+        app.game_draft.cast_key.clear();
+        app.game_draft.stop_hotkey.clear();
+        assert!(app.save_game_settings().is_err());
+        assert_eq!(app.config.game.stop_hotkey, "f9");
+        assert_eq!(app.config.game, app.store.load().unwrap().game);
+        assert!(app.hotkeys.is_none());
+        app.game_draft.cast_key = "2".into();
+        app.game_draft.pause_hotkey.clear();
+        app.save_game_settings().unwrap();
+        assert!(app.hotkeys.is_some());
+        assert_eq!(app.config.game, app.game_draft);
+        app.game_draft.cast_key.clear();
+        assert!(app.save_game_settings().is_err());
+        assert!(app.hotkeys.is_some());
+        assert_eq!(app.config.game.cast_key, "2");
+    }
 }

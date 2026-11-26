@@ -183,11 +183,7 @@ class FishingEngine:
         if self._stop:
             self._finish("user")
             return
-        if self._time_up() and not (self.cfg.game.quit_key and self.state in BUSY):
-            # with a quit key, the cast in hand finishes first (no new one starts): the quit
-            # comes between casts, not mid-cast or while looting
-            self._quit_game()
-            self._finish("user" if self._stop else "session limit")
+        if self._stop_at_session_limit():
             return
         try:
             self._refresh_window(now)
@@ -207,7 +203,7 @@ class FishingEngine:
 
     def _pause_if_needed(self) -> bool:
         focused = self.input.is_game_focused(self.window)
-        if focused is False or self.window.minimized or self._user_paused.is_set():
+        if focused is not True or self.window.minimized or self._user_paused.is_set():
             if self.state is not State.PAUSED:
                 self.state = State.PAUSED
                 self._icon_xy = None
@@ -254,7 +250,8 @@ class FishingEngine:
             self._apply_lure()
             return  # still IDLE: the next step casts
         if self.behavior.jump():
-            self._press(self.cfg.behavior.jump_key, "jump")
+            if not self._press(self.cfg.behavior.jump_key, "jump"):
+                return
             if not self._wait(self._rng.uniform(*JUMP_LANDING_S), watch_focus=True):
                 return
             now = self._clock()
@@ -278,6 +275,7 @@ class FishingEngine:
         self._t_cast = self._clock()
         self._listen_at = self._t_cast
         self._last_acquire = -math.inf
+        self._icon_xy = None
         limit = max(MEASURE_AFTER_S, self.cfg.run.icon_timeout_s)
         self._change(
             State.CASTING,
@@ -295,8 +293,6 @@ class FishingEngine:
         self._last_acquire = now
         if self._check_icon(now):
             return
-        if self._recast_if_no_sound():
-            return
         if self._clock() - self._t_cast >= self.cfg.run.icon_timeout_s:
             self._emit(ev.Timeout(self._t(), "icon", self.cfg.run.icon_timeout_s))
             self._miss(msg("no_icon"))
@@ -305,7 +301,9 @@ class FishingEngine:
         """An existing gear means wait, including one visible before starting or resuming."""
         frame = self.capturer.grab()
         match = self._match_icon(frame, now)
-        if self._stop or self._pause_if_needed():
+        if self._stop or self._pause_if_needed() or self._stop_at_session_limit():
+            return True
+        if self.state is State.CASTING and self._recast_if_no_sound():
             return True
         if match is not None:
             self._found(frame, match)
@@ -316,6 +314,13 @@ class FishingEngine:
         v = self.cfg.vision
         region = Region(v.search_left, v.search_top, v.search_right, v.search_bottom)
         if self.matcher is not None:
+            if self._icon_xy is not None and self.state in (State.WAIT_BITE, State.INTERACT):
+                height, width = frame.shape[:2]
+                near = Region.around(*self._icon_xy, width, height).intersection(region)
+                if near != region:
+                    nearby = self.matcher.match(frame, near)
+                    if nearby.accepted(self.threshold):
+                        return nearby
             m = self.matcher.match(frame, region)
             if m.accepted(self.threshold):
                 return m
@@ -369,8 +374,10 @@ class FishingEngine:
         if self._recast_if_no_sound():
             return
         seen = self._track(now)
+        if seen is None or self._stop_at_session_limit() or self._recast_if_no_sound():
+            return
         if (
-            seen is False
+            not seen
             and self._misses >= self.lost_after
             and self._disappeared_since is not None
             and now - self._disappeared_since >= ICON_LOST_S
@@ -382,9 +389,11 @@ class FishingEngine:
     def _after_reel(self, now: float) -> None:
         # The old gear and duplicate audio belong to the completed cast. They must not
         # restart the 30-second bite wait or add an icon-loss/random-pause delay.
-        if self._clock() < self._listen_at + PICKUP_WAIT_S:
+        deadline = self._listen_at + PICKUP_WAIT_S
+        if self._clock() < deadline:
             self._track(now)  # Only used for the estimated catch count, never to gate recasting.
-            return
+            if self._stop or self.state is not State.INTERACT or self._clock() < deadline:
+                return
         confirmed = self._misses >= 2 and self._disappeared_since is not None
         if confirmed:
             self.stats = replace(self.stats, catches=self.stats.catches + 1)
@@ -469,6 +478,7 @@ class FishingEngine:
             self.capturer.open(found)
         if resized:
             self.matcher = None
+            self._icon_xy = None
             self._last_calibrate = self._last_box_grab = self._last_acquire = -math.inf
             self._misses = 0
             self._disappeared_since = None
@@ -497,6 +507,15 @@ class FishingEngine:
     def _time_up(self) -> bool:
         return self.session_s != 0 and self._elapsed() >= self.session_s
 
+    def _stop_at_session_limit(self, *, starting_cast: bool = False) -> bool:
+        if not self._time_up():
+            return False
+        if self.cfg.game.quit_key and self.state in BUSY and not starting_cast:
+            return False
+        self._quit_game()
+        self._finish("user" if self._stop else "session limit")
+        return True
+
     def _quit_game(self) -> None:
         """Press the key of the player's /quit macro, if one is set, and wait for the game
         window to close; press it again while the window stays, QUIT_TRIES times in all."""
@@ -505,10 +524,11 @@ class FishingEngine:
             return
         try:
             for _ in range(QUIT_TRIES):
-                if self.input.is_game_focused(self.window) is False:
-                    self._emit(ev.Error(self._t(), "会话时间已到，游戏不在前台，已保留游戏窗口"))
-                    return
                 if not self._press(key, "quit"):
+                    if self.state is State.PAUSED and not self._stop:
+                        self._emit(
+                            ev.Error(self._t(), "无法确认游戏在前台或已暂停，已保留游戏窗口")
+                        )
                     return
                 if find is None:
                     return  # nothing to watch the window with
@@ -544,11 +564,9 @@ class FishingEngine:
         return False
 
     def _press(self, key: str, why: str) -> bool:
-        if (
-            self._stop
-            or self._user_paused.is_set()
-            or self.input.is_game_focused(self.window) is False
-        ):
+        if self._stop or self._pause_if_needed():
+            return False
+        if why != "quit" and self._stop_at_session_limit(starting_cast=why != "bite"):
             return False
         self.input.press_key(key, self.behavior.hold_s())
         self._emit(ev.KeyPressed(self._t(), key, why))
@@ -583,6 +601,8 @@ class FishingEngine:
     def _wait(self, seconds: float, *, watch_focus: bool = False) -> bool:
         """Return whether the wait completed; gameplay delays also pause on focus loss."""
         deadline = self._clock() + seconds
+        if watch_focus and self.started is not None and self.session_s:
+            deadline = min(deadline, self.started + self.session_s)
         while not self._stop:
             if watch_focus and self._pause_if_needed():
                 return False
@@ -590,7 +610,7 @@ class FishingEngine:
                 return False
             remaining = deadline - self._clock()
             if remaining <= 0:
-                return True
+                return not watch_focus or not self._time_up()
             step = min(SLEEP_SLICE_S, remaining)
             if self._real_sleep:
                 self._stop_event.wait(step)
